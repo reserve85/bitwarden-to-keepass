@@ -42,7 +42,10 @@ jobs:
       - name: Install gitleaks
         # Scans the latest commit only; historical issues (e.g. the .env
         # committed before v0.2) have to be purged from history manually.
-        run: go install github.com/gitleaks/gitleaks/v8@v8.30.1
+        # The Go module keeps its historical import path: even though the repo now lives in the
+        # 'gitleaks' org, go.mod still declares 'zricethezav/gitleaks/v8' (as of v8.30.1).
+        # Keep in sync with rev: in .pre-commit-config.yaml.
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
       - name: Run gitleaks (HEAD)
         run: "$(go env GOPATH)/bin/gitleaks detect --source . --log-opts=--max-count=1 --no-banner --verbose"
       - name: Install pip-audit
@@ -50,4 +53,8 @@ jobs:
       - name: Install runtime dependencies
         run: pip install "pykeepass==4.1.0.post1"
       - name: Audit dependencies
-        run: pip-audit
+        # pip-audit scans the whole environment; the runner ships a pip version with
+        # published advisories, so upgrade pip first to avoid failing on pip itself.
+        run: |
+          python -m pip install --upgrade pip
+          pip-audit

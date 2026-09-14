@@ -7,6 +7,12 @@ ARG BW_SHA256=367f618e9fcccaac4980ec12c7bafd01df739b5f3cb1af31bc9045cf75eea1d6
 
 FROM python:3.12-slim-bookworm
 
+# ARGs declared before the first FROM are only in scope for the FROM line.
+# They must be redeclared inside the stage (without a value, which inherits
+# the default declared above) to be usable in the RUN instructions below.
+ARG BW_VERSION
+ARG BW_SHA256
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends wget unzip && \
     wget -O "bw.zip" "https://vault.bitwarden.com/download/?app=cli&platform=linux&version=${BW_VERSION}" && \
