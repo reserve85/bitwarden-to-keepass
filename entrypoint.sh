@@ -19,6 +19,28 @@ get_bw_session() {
     if [[ -n "${BW_SESSION:-}" ]]; then
         # Pre-generated session, e.g. `bw unlock --raw` run manually once.
         session="$BW_SESSION"
+    elif [[ -t 0 ]]; then
+        # INTERACTIVE MODE - only reachable through `docker compose run -it`.
+        # stdin is a real terminal here, so the CLI masks the master password
+        # and asks for the two-step code itself; nothing is echoed or stored.
+        # When the script runs unattended (create_backup.ps1 / Task Scheduler)
+        # stdin is not a TTY, so this branch is never taken and the secrets
+        # cannot leak into redirected logs.
+        "$BW_PATH" logout >/dev/null 2>&1 || true
+        echo "Interactive Bitwarden login: enter your email, then the master" >&2
+        echo "password (hidden) and - if your account uses 2FA - the code." >&2
+        session=$("$BW_PATH" login --raw)
+        if [[ -z "$session" ]]; then
+            log_error "Interactive login failed. Check your email address, master password and 2FA code (or approve a pending 'Login with device' request on your phone)."
+            return 1
+        fi
+        # Email+password login normally leaves the vault unlocked; if the flow
+        # only authenticated (locked), stop with a hint instead of failing
+        # later during sync/export.
+        if "$BW_PATH" status 2>/dev/null | grep -q '"status":"locked"'; then
+            log_error "The vault is locked after the interactive login. Run 'bw unlock --raw' in a terminal and set the output as BW_SESSION in '.env'."
+            return 1
+        fi
     elif [[ -n "${BW_CLIENTID:-}" && -n "${BW_CLIENTSECRET:-}" ]]; then
         # Personal API key (non-interactive; no email/password prompt, no 2FA).
         # Log out first: `bw login` refuses while a previous session is stored

@@ -61,13 +61,21 @@ minutes) and then starts the container.
 ### 5. What happens next
 The container authenticates **non-interactively** and exports your vault:
 
-1. It logs in with the **personal API key** (`BW_CLIENTID` / `BW_CLIENTSECRET`)
-   and unlocks the vault with your **Bitwarden master password** (`BW_PASSWORD`,
-   read via `bw unlock --passwordenv` - no interactive prompt, nothing is
-   echoed), or uses a pre-generated `BW_SESSION` from your `.env`. For security
-   it *never* runs the interactive `bw login` / `bw unlock` prompts - the
-   container normally has no terminal, so those prompts would echo your email
-   and master password in clear text and dump them into redirected logs.
+1. It logs in and unlocks, or uses a pre-generated session:
+   - **Interactive (recommended if you do not want secrets in `.env`):** start
+     the container with `docker compose run -it bitwarden-to-keepass` and type
+     your email, master password and 2FA code into the terminal prompts (the
+     master password is masked). The CLI only prompts when a real terminal is
+     attached - never when the script runs from Task Scheduler or with
+     redirected output.
+   - **Automated / API key:** it logs in with the **personal API key**
+     (`BW_CLIENTID` / `BW_CLIENTSECRET`) and unlocks the vault with your
+     **Bitwarden master password** (`BW_PASSWORD`, read via
+     `bw unlock --passwordenv` - no interactive prompt, nothing is echoed), or
+     uses a pre-generated `BW_SESSION` from your `.env`. For security it
+     *never* runs the interactive `bw login` / `bw unlock` prompts unattended -
+     without a terminal those prompts would echo your email and master password
+     in clear text and dump them into redirected logs.
 2. Your vault is synced, and your logins (with TOTP seeds, URIs, custom
    fields, attachments, notes) and secure notes are written into the KeePass
    database.
