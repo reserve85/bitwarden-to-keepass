@@ -143,6 +143,97 @@ class BitwardenToKeePassTest(unittest.TestCase):
         self.assertEqual(entry.title, "Vault")
         self.assertTrue(entry.group.is_root_group)
 
+    def test_update_removes_stale_custom_field(self) -> None:
+        # Regression: a custom field deleted in Bitwarden used to stay in the
+        # KeePass entry forever (rotated/revoked secrets were carried over).
+        self._new_db()
+        item = _login_item("Vault", "id1")
+        item["fields"] = [
+            {"name": "stale", "value": "old-secret", "type": CustomFieldType.HIDDEN},
+        ]
+        self._run([item])
+        self.assertEqual(
+            self._reload().entries[0].get_custom_property("stale"),
+            "old-secret",
+        )
+
+        item = _login_item("Vault", "id1", password="newpass")
+        item["fields"] = [
+            {"name": "current", "value": "value", "type": CustomFieldType.TEXT},
+        ]
+        self._run([item])
+
+        entry = self._reload().entries[0]
+        self.assertIsNone(entry.get_custom_property("stale"))
+        self.assertEqual(entry.get_custom_property("current"), "value")
+        self.assertEqual(entry.password, "newpass")
+
+    def test_attachments_are_not_duplicated_and_removed_when_deleted(self) -> None:
+        # Regression: every export used to re-add and download each surviving
+        # attachment (duplicate binaries, growing DB), and attachments deleted
+        # in Bitwarden lingered in the KeePass entry.
+        self._new_db()
+        item = _login_item("Vault", "id1")
+        item["attachments"] = [{"id": "a1", "fileName": "file.txt"}]
+        self._run([item])
+        self.assertEqual(len(self._reload().entries[0].attachments), 1)
+
+        # A second export must not re-add the same attachment.
+        self._run([item])
+        self.assertEqual(len(self._reload().entries[0].attachments), 1)
+
+        # Deleting the attachment in Bitwarden must remove it from the DB.
+        item = _login_item("Vault", "id1")
+        item["attachments"] = []
+        self._run([item])
+        self.assertEqual(self._reload().entries[0].attachments, [])
+
+    def test_failed_update_is_rolled_back_to_previous_state(self) -> None:
+        # Regression: a failing attachment used to leave a half-updated entry
+        # behind (new password/fields saved) while the item was reported
+        # "skipped"; the next run could not cleanly recover either.
+        self._new_db()
+        item = _login_item("Vault", "id1", password="pass")
+        item["attachments"] = [{"id": "a1", "fileName": "file.txt"}]
+        self._run([item])
+
+        failing = _login_item("Vault", "id1", password="newpass")
+        failing["attachments"] = [{"id": "b2", "fileName": "new.txt"}]
+        self._run([failing], client=FakeBwClient([failing], fail_attachment=True))
+
+        entry = self._reload().entries[0]
+        self.assertEqual(entry.title, "Vault")
+        self.assertEqual(entry.password, "pass")
+        self.assertEqual(len(entry.attachments), 1)
+        self.assertEqual(entry.attachments[0].filename, "file.txt")
+
+    def test_item_without_type_is_skipped_not_fatal(self) -> None:
+        # Regression: a single malformed item used to abort the whole export.
+        self._new_db()
+        self._run(
+            [
+                {"id": "bad", "name": "broken"},
+                _login_item("Vault", "id1"),
+            ],
+        )
+        entries = self._reload().entries
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].title, "Vault")
+
+    def test_missing_parent_directory_is_created(self) -> None:
+        db_path = Path(self._tmp.name) / "nested" / "dir" / "test.kdbx"
+        bitwarden_to_keepass(
+            Namespace(
+                bw_path="bw",
+                bw_session="session",
+                database_path=str(db_path),
+                database_password="test",
+                database_keyfile=None,
+            ),
+            client=FakeBwClient([]),
+        )
+        self.assertTrue(db_path.is_file())
+
     def test_wrong_database_password_raises(self) -> None:
         self._new_db(titles=["Vault"])
         with self.assertRaises(RuntimeError):
@@ -182,6 +273,7 @@ class RedactionTest(unittest.TestCase):
                 {"name": "note", "value": "visible", "type": CustomFieldType.TEXT},
                 {"name": "API Key", "value": "sk-xyz", "type": CustomFieldType.TEXT},
                 {"name": "hidden", "value": "secret", "type": CustomFieldType.HIDDEN},
+                {"name": "future", "value": "future-secret", "type": 9},
             ],
         }
 
@@ -193,6 +285,7 @@ class RedactionTest(unittest.TestCase):
         self.assertEqual(redacted["fields"][0]["value"], "visible")
         self.assertEqual(redacted["fields"][1]["value"], "***")
         self.assertEqual(redacted["fields"][2]["value"], "***")
+        self.assertEqual(redacted["fields"][3]["value"], "***")
         # The source item is not modified.
         self.assertEqual(item["login"]["password"], "hunter2")
         self.assertEqual(item["notes"], "recovery code: 1234-5678")
