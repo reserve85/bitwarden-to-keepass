@@ -247,11 +247,28 @@ if ($Interactive) {
 function Run-Compose {
     param([string[]]$ComposeArgs)
     if ($Interactive) {
-        # The interactive export hands the terminal to the container for the
-        # `bw` / `getpass` prompts. Docker must talk to the console directly -
-        # piping stdout here would detach it from the TTY.
-        if ($UseModernCompose) { docker compose @ComposeArgs }
-        else                   { docker-compose @ComposeArgs }
+        # `docker compose run` hands the terminal to the container for the
+        # masked `bw` / `getpass` prompts. It must keep the console directly
+        # (no pipe): if stdout were piped, Docker would not put the host
+        # terminal into raw mode and the typed master password would be echoed
+        # by the host in clear text.
+        # Every other command (currently only `build`) relays its stdout via
+        # Write-Host instead. Inside `if ((Run-Compose ...) -ne 0)` any native
+        # stdout line (e.g. "Image ... Built") would become extra function
+        # output and turn the return value into an Object[], making the
+        # `-ne 0` check always true - a successful build would look like a
+        # failure (see Invoke-Cli).
+        if ($ComposeArgs[0] -eq "run") {
+            if ($UseModernCompose) { docker compose @ComposeArgs }
+            else                   { docker-compose @ComposeArgs }
+            return $LASTEXITCODE
+        }
+        # Relay stdout to the console but keep it out of the return value (see Invoke-Cli).
+        # Deliberately NO 2>&1 here: docker prints its progress to stderr, and under
+        # $ErrorActionPreference = 'Stop' PowerShell 5.1 promotes native stderr to a
+        # terminating error, which would abort the script mid-build.
+        if ($UseModernCompose) { docker compose @ComposeArgs | ForEach-Object { Write-Host $_ } }
+        else                   { docker-compose @ComposeArgs | ForEach-Object { Write-Host $_ } }
         return $LASTEXITCODE
     }
     # Relay stdout to the console but keep it out of the return value (see Invoke-Cli).
