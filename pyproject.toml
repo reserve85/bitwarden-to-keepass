@@ -40,6 +40,7 @@ ignore = [
     "PT027",  # assertRaises as a context manager instead of pytest.raises
     "S105",   # dummy secrets in test fixtures
     "S106",   # dummy password arguments in test fixtures
+    "S107",   # hardcoded dummy passwords in test fixtures
 ]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.

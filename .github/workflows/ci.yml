@@ -18,6 +18,8 @@ jobs:
         run: ruff check .
       - name: Format check
         run: ruff format --check .
+        # The following rule may conflict with the formatter; keep it disabled
+        # only if the project ever turns it on explicitly.
 
   test:
     runs-on: ubuntu-latest
@@ -30,3 +32,22 @@ jobs:
         run: pip install "pykeepass==4.1.0.post1"
       - name: Test
         run: python -m unittest discover -s tests -v
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        # Scans the latest commit only; historical issues (e.g. the .env
+        # committed before v0.2) have to be purged from history manually.
+        run: go install github.com/gitleaks/gitleaks/v8@v8.30.1
+      - name: Run gitleaks (HEAD)
+        run: "$(go env GOPATH)/bin/gitleaks detect --source . --log-opts=--max-count=1 --no-banner --verbose"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Install runtime dependencies
+        run: pip install "pykeepass==4.1.0.post1"
+      - name: Audit dependencies
+        run: pip-audit

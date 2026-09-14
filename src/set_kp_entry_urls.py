@@ -1,4 +1,6 @@
 # Copyright (C) 2025 David Němec
+import contextlib
+
 from pykeepass.entry import Entry
 
 ANDROID_APP_PROPERTY = "AndroidApp"
@@ -6,10 +8,50 @@ IOS_APP_PROPERTY_PREFIX = "iOS app #"
 EXTRA_URL_PROPERTY_PREFIX = "KP2A_URL_"
 
 
-def set_kp_entry_urls(entry: Entry, urls: list[str]) -> None:
+def _remove_stored_url_properties(entry: Entry) -> None:
+    for name in list(entry.custom_properties):
+        if name == ANDROID_APP_PROPERTY or name.startswith(
+            (
+                ANDROID_APP_PROPERTY + "_",
+                IOS_APP_PROPERTY_PREFIX,
+                EXTRA_URL_PROPERTY_PREFIX,
+            ),
+        ):
+            with contextlib.suppress(AttributeError):
+                entry.delete_custom_property(name)
+
+
+def _remove_url_attribute(entry: Entry) -> None:
+    """Remove the ``URL`` string field if present.
+
+    pykeepass 4.x has no supported way to *clear* the URL attribute
+    (``entry.url = None`` raises ``TypeError``), so the field element is
+    removed directly from the entry XML.
+    """
+    # pykeepass exposes no public API for this, hence the private members.
+    url_element = entry._xpath('String/Key[text()="URL"]/..', first=True)  # noqa: SLF001
+    if url_element is not None:
+        entry._element.remove(url_element)  # noqa: SLF001
+
+
+def set_kp_entry_urls(
+    entry: Entry,
+    urls: list[str],
+    *,
+    reset: bool = False,
+) -> None:
     """Store a list of URLs coming from a Bitwarden entry in different
     attributes and custom properties of a KeePass entry, depending on whether
-    it's an identifier for an Android or iOS app or it's a generic URL"""
+    it's an identifier for an Android or iOS app or it's a generic URL.
+
+    With ``reset=True`` any previously stored app identifiers, extra URLs and
+    the URL attribute are removed first, so URLs deleted in Bitwarden do not
+    linger in an updated KeePass entry.
+    """
+    if reset:
+        _remove_url_attribute(entry)
+        _remove_stored_url_properties(entry)
+
     android_apps = ios_apps = extra_urls = 0
 
     for url in urls:

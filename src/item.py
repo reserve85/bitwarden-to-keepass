@@ -26,8 +26,8 @@ class Item:
     def get_name(self) -> str:
         return self.item.get("name", "")
 
-    def get_folder_id(self) -> str:
-        return self.item.get("folderId", "")
+    def get_folder_id(self) -> str | None:
+        return self.item.get("folderId")
 
     def get_username(self) -> str:
         if "login" not in self.item:

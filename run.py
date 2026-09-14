@@ -56,37 +56,54 @@ def environ_or_required(key: str) -> dict:
     )
 
 
-parser = ArgumentParser()
-parser.add_argument(
-    "--bw-session",
-    help="Session generated from bitwarden-cli (bw login)",
-    **environ_or_required("BW_SESSION"),
-)
-parser.add_argument(
-    "--database-path",
-    help="Path to KeePass database. If database does not exists it will be created.",
-    **environ_or_required("DATABASE_PATH"),
-)
-parser.add_argument(
-    "--database-password",
-    help="Password for KeePass database",
-    default=os.environ.get("DATABASE_PASSWORD", None),
-)
-parser.add_argument(
-    "--database-keyfile",
-    help="Path to Key File for KeePass database",
-    default=os.environ.get("DATABASE_KEYFILE", None),
-)
-parser.add_argument(
-    "--bw-path",
-    help="Path for bw binary",
-    default=os.environ.get("BW_PATH", "bw"),
-)
+def build_parser() -> ArgumentParser:
+    parser = ArgumentParser(
+        description="Export (most of) your Bitwarden items into a KeePass database.",
+        epilog=(
+            "SECURITY: the Bitwarden session (BW_SESSION) and the database "
+            "password (DATABASE_PASSWORD or an interactive prompt) are never "
+            "read from the command line, because argv is visible to other "
+            "processes."
+        ),
+    )
+    parser.add_argument(
+        "--database-path",
+        help="Path to the KeePass database (created if it does not exist).",
+        **environ_or_required("DATABASE_PATH"),
+    )
+    parser.add_argument(
+        "--database-keyfile",
+        help="Path to Key File for KeePass database",
+        default=os.environ.get("DATABASE_KEYFILE", None),
+    )
+    parser.add_argument(
+        "--bw-path",
+        help="Path for bw binary",
+        default=os.environ.get("BW_PATH", "bw"),
+    )
+    return parser
+
+
+parser = build_parser()
 args = parser.parse_args()
+
+# SECURITY: the session is exclusively an environment variable, never a
+# command-line argument. Generate one with `bw unlock --raw` (or run the
+# Docker entrypoint, which uses a personal API key) and export it.
+session = os.environ.get("BW_SESSION")
+if not session:
+    parser.error(
+        "BW_SESSION is not set. Generate one with `bw unlock --raw` and export "
+        "it, e.g. `export BW_SESSION=$(bw unlock --raw)`. The session is not "
+        "accepted as a command-line argument because argv is visible to other "
+        "processes.",
+    )
+args.bw_session = session
+args.database_password = os.environ.get("DATABASE_PASSWORD")
 
 try:
     check_args(args)
     bitwarden_to_keepass(args)
-except RuntimeError:
+except Exception:
     logger.exception("Exception occurred.")
     sys.exit(1)

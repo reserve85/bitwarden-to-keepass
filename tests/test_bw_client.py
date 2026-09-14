@@ -1,4 +1,5 @@
 # Copyright (C) 2025 David Němec
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -41,6 +42,41 @@ class BwClientTest(unittest.TestCase):
             ["bw", "get", "attachment", "att1", "--raw", "--itemid", "item1"],
         )
         self.assertEqual(data, b"binary-data")
+
+    def test_subprocess_failure_raises_runtime_error_with_stderr(self) -> None:
+        def fake_check_output(command: list[str], **_kwargs: object) -> str:
+            raise subprocess.CalledProcessError(
+                1,
+                command,
+                output=b"",
+                stderr=b"Not logged in.",
+            )
+
+        with (
+            patch("src.bw_client.subprocess.check_output", fake_check_output),
+            self.assertRaisesRegex(RuntimeError, "Not logged in."),
+        ):
+            BwClient("bw", "session").list_folders()
+
+    def test_subprocess_timeout_raises_runtime_error(self) -> None:
+        def fake_check_output(command: list[str], **_kwargs: object) -> str:
+            raise subprocess.TimeoutExpired(command, timeout=600)
+
+        with (
+            patch("src.bw_client.subprocess.check_output", fake_check_output),
+            self.assertRaisesRegex(RuntimeError, "timed out"),
+        ):
+            BwClient("bw", "session").list_folders()
+
+    def test_missing_binary_raises_runtime_error(self) -> None:
+        def fake_check_output(_command: list[str], **_kwargs: object) -> str:
+            raise FileNotFoundError
+
+        with (
+            patch("src.bw_client.subprocess.check_output", fake_check_output),
+            self.assertRaisesRegex(RuntimeError, "bw binary not found"),
+        ):
+            BwClient("bw", "session").list_folders()
 
 
 if __name__ == "__main__":

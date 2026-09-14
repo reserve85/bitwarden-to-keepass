@@ -6,15 +6,23 @@ from pathlib import Path
 
 from pykeepass import PyKeePass, create_database
 
-from src.bitwarden_to_keepass import bitwarden_to_keepass
+from src.bitwarden_to_keepass import _redacted_item, bitwarden_to_keepass
 from src.item import CustomFieldType
 
 
 class FakeBwClient:
     """Replaces the real BwClient for tests."""
 
-    def __init__(self, items: list[dict]) -> None:
+    def __init__(
+        self,
+        items: list[dict],
+        attachment_payload: bytes = b"attachment-data",
+        *,
+        fail_attachment: bool = False,
+    ) -> None:
         self._items = items
+        self._attachment_payload = attachment_payload
+        self._fail_attachment = fail_attachment
 
     def list_folders(self) -> list[dict]:
         return []
@@ -23,21 +31,25 @@ class FakeBwClient:
         return self._items
 
     def get_attachment(self, item_id: str, attachment_id: str) -> bytes:
-        message = (
-            f"Unexpected attachment fetch: item={item_id} attachment={attachment_id}"
-        )
-        raise AssertionError(message)
+        if self._fail_attachment:
+            message = f"boom: item={item_id} attachment={attachment_id}"
+            raise RuntimeError(message)
+        return self._attachment_payload
 
 
-def _login_item(name: str, item_id: str) -> dict:
-    return {
+def _login_item(
+    name: str,
+    item_id: str,
+    password: str = "pass",
+    folder_id: str | None = None,
+) -> dict:
+    item = {
         "id": item_id,
         "type": 1,
         "name": name,
-        "folderId": None,
         "login": {
             "username": "user",
-            "password": "pass",
+            "password": password,
             "uris": [{"uri": "https://example.com"}],
             "totp": "otpauth://totp/Example:user?secret=SECRET&period=30&digits=6",
         },
@@ -45,6 +57,9 @@ def _login_item(name: str, item_id: str) -> dict:
         "attachments": [],
         "notes": "some notes",
     }
+    if folder_id is not None:
+        item["folderId"] = folder_id
+    return item
 
 
 class BitwardenToKeePassTest(unittest.TestCase):
@@ -61,7 +76,7 @@ class BitwardenToKeePassTest(unittest.TestCase):
             kp.add_entry(kp.root_group, title, "user", "pass")
         kp.save()
 
-    def _run(self, items: list[dict]) -> None:
+    def _run(self, items: list[dict], client: FakeBwClient | None = None) -> None:
         bitwarden_to_keepass(
             Namespace(
                 bw_path="bw",
@@ -70,7 +85,7 @@ class BitwardenToKeePassTest(unittest.TestCase):
                 database_password="test",
                 database_keyfile=None,
             ),
-            client=FakeBwClient(items),
+            client=client or FakeBwClient(items),
         )
 
     def _reload(self) -> PyKeePass:
@@ -93,18 +108,40 @@ class BitwardenToKeePassTest(unittest.TestCase):
         titles = sorted(e.title for e in self._reload().entries)
         self.assertEqual(titles, ["Vault", "Vault - (id1) [1]"])
 
-    def test_repeated_exports_do_not_hang(self) -> None:
-        # Regression: the old fallback title never changed, so a third run
-        # with a title collision looped forever.
+    def test_repeated_exports_update_in_place(self) -> None:
+        # Regression: the old export added a near-duplicate on every run, and
+        # the fixed fallback title looped forever. The Bitwarden ID now makes
+        # repeated exports update the existing entry instead.
         self._new_db()
-        for _ in range(3):
-            self._run([_login_item("Vault", "id1")])
+        self._run([_login_item("Vault", "id1")])
+        self._run([_login_item("Vault", "id1", password="newpass")])
 
-        titles = sorted(e.title for e in self._reload().entries)
-        self.assertEqual(
-            titles,
-            ["Vault", "Vault - (id1) [1]", "Vault - (id1) [2]"],
-        )
+        entries = self._reload().entries
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].title, "Vault")
+        self.assertEqual(entries[0].password, "newpass")
+
+    def test_partial_entry_is_rolled_back_on_attachment_failure(self) -> None:
+        # Regression: a failing attachment used to leave a half-populated
+        # (but still saved) entry behind, and retries accumulated duplicates.
+        self._new_db()
+        item = _login_item("Vault", "id1")
+        item["attachments"] = [{"id": "a1", "fileName": "file.txt"}]
+        client = FakeBwClient([item], fail_attachment=True)
+
+        self._run([item], client=client)
+
+        self.assertEqual(self._reload().entries, [])
+
+    def test_unknown_folder_falls_back_to_root(self) -> None:
+        # A stale folderId (folder deleted after list_folders) must not
+        # silently drop the item.
+        self._new_db()
+        self._run([_login_item("Vault", "id1", folder_id="ghost-folder")])
+
+        entry = self._reload().entries[0]
+        self.assertEqual(entry.title, "Vault")
+        self.assertTrue(entry.group.is_root_group)
 
     def test_wrong_database_password_raises(self) -> None:
         self._new_db(titles=["Vault"])
@@ -129,6 +166,37 @@ class BitwardenToKeePassTest(unittest.TestCase):
             ],
         )
         self.assertEqual(self._reload().entries, [])
+
+
+class RedactionTest(unittest.TestCase):
+    def test_redacted_item_redacts_secrets_but_not_plain_text(self) -> None:
+        item = {
+            "id": "id1",
+            "login": {
+                "password": "hunter2",
+                "totp": "otpauth://totp/x",
+                "username": "u",
+            },
+            "notes": "recovery code: 1234-5678",
+            "fields": [
+                {"name": "note", "value": "visible", "type": CustomFieldType.TEXT},
+                {"name": "API Key", "value": "sk-xyz", "type": CustomFieldType.TEXT},
+                {"name": "hidden", "value": "secret", "type": CustomFieldType.HIDDEN},
+            ],
+        }
+
+        redacted = _redacted_item(item)
+
+        self.assertEqual(redacted["login"]["password"], "***")
+        self.assertNotIn("totp", redacted["login"])
+        self.assertEqual(redacted["notes"], "***")
+        self.assertEqual(redacted["fields"][0]["value"], "visible")
+        self.assertEqual(redacted["fields"][1]["value"], "***")
+        self.assertEqual(redacted["fields"][2]["value"], "***")
+        # The source item is not modified.
+        self.assertEqual(item["login"]["password"], "hunter2")
+        self.assertEqual(item["notes"], "recovery code: 1234-5678")
+        self.assertEqual(item["fields"][1]["value"], "sk-xyz")
 
 
 if __name__ == "__main__":

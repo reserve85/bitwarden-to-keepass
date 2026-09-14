@@ -75,10 +75,16 @@ def bfs_traverse_execute(
         callback(kp, child)
 
 
-def load_folders(kp: PyKeePass, folders: list[dict]) -> dict[str, KPGroup]:
-    # sort folders so that in the case of nested folders
-    # the parents would be guaranteed to show up before the children
-    folders.sort(key=lambda x: x["name"])
+def load_folders(kp: PyKeePass, folders: list[dict]) -> dict[str | None, KPGroup]:
+    # Guard against malformed records (missing or empty name) so a single
+    # broken folder cannot crash the whole export. Bitwarden usually never
+    # sends these, but the error handling must not be the exported data.
+    folders = sorted(
+        (folder for folder in folders if folder.get("name")),
+        # sort folders so that in the case of nested folders
+        # the parents would be guaranteed to show up before the children
+        key=lambda folder: folder["name"],
+    )
 
     # dict to store mapping of Bitwarden folder id to keepass group
     groups_by_id: dict[str | None, KPGroup] = {}

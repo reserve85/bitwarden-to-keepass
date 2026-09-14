@@ -58,22 +58,21 @@ docker compose run bitwarden-to-keepass
 The first run builds the Docker image automatically (this can take a few
 minutes) and then starts the container.
 
-### 5. What happens next (interactively)
-The container logs you in and exports your vault. You will be asked to:
+### 5. What happens next
+The container authenticates **non-interactively** and exports your vault:
 
-1. **Log in to your Bitwarden vault** with the official
-   [bitwarden-cli](https://bitwarden.com/help/article/cli/):
-   - the first time: your Bitwarden **email**, **master password** and, if
-     enabled, your **2FA code**
-   - on later runs you stay logged in (the login state is kept in a persistent
-     Docker volume), so only your **master password** is requested again
-2. **Choose the KeePass database password**: a new, strong password that will
-   protect your `bitwarden-export.kdbx` file. It is not displayed while typing,
-   and you will need it every time you open the database. (This prompt is
-   skipped if you set `DATABASE_PASSWORD` in `.env`.)
-
-The vault is synced and your logins (with TOTP seeds, URIs, custom fields,
-attachments, notes) and secure notes are written into the KeePass database.
+1. It logs in with the **personal API key** (`BW_CLIENTID` / `BW_CLIENTSECRET`)
+   or `BW_SESSION` from your `.env`. For security it *never* runs the
+   interactive `bw login` / `bw unlock` prompts - the container normally has
+   no terminal, so those prompts would echo your email and master password in
+   clear text and dump them into redirected logs.
+2. Your vault is synced, and your logins (with TOTP seeds, URIs, custom
+   fields, attachments, notes) and secure notes are written into the KeePass
+   database.
+3. You are prompted for the **KeePass database password** only if you did not
+   set `DATABASE_PASSWORD` in `.env` *and* the container has a terminal. Set
+   `DATABASE_PASSWORD` in `.env` for non-interactive or scheduled runs (see
+   "Automated backup").
 
 ### 6. Where is the result?
 The database is written to `exports/bitwarden-export.kdbx` in the repository
@@ -84,6 +83,10 @@ password you chose in step 5.
 ### 7. Run it again / keep it up to date
 - Pull the latest version before each run: `git pull`
 - Run the export again: `docker compose run bitwarden-to-keepass`
+- Repeated exports **update** the entries created by earlier runs (matched via
+  the `Bitwarden ID` custom property) instead of piling up duplicates; entries
+  for items that still exist are never created twice, and entries for failed
+  items are rolled back instead of being saved half-written.
 - For fully automated, scheduled backups with copies to OneDrive, Dropbox, etc.
   on Windows, see the [Automated backup (Windows)](#automated-backup-windows)
   section below.
@@ -99,10 +102,14 @@ make build
 ```
 source .venv/bin/activate
 ```
-- [Download](https://bitwarden.com/help/article/cli/#download-and-install) official bitwarden-cli and do `bw login` (you need `BW_SESSION` for export to work).
-- Run
+- [Download](https://bitwarden.com/help/article/cli/#download-and-install) official bitwarden-cli and generate a session (`bw unlock --raw`).
+- **SECURITY:** the session and the database password are *never* passed on the
+  command line (argv is visible to other processes) - they come from
+  environment variables or a hidden prompt. Run:
 ```
-python run.py --bw-session BW_SESSION --database-path DATABASE_PATH [--database-password DATABASE_PASSWORD] [--database-keyfile DATABASE_KEYFILE] [--bw-path BW_PATH]
+export BW_SESSION=$(bw unlock --raw)
+export DATABASE_PASSWORD=your-database-password   # omit to be prompted
+python run.py --database-path DATABASE_PATH [--database-keyfile DATABASE_KEYFILE] [--bw-path BW_PATH]
 ```
 - Run the test suite (requires the virtual environment)
 ```
@@ -134,3 +141,27 @@ disk, ...).
   API key (`BW_CLIENTID` / `BW_CLIENTSECRET`, vault.bitwarden.com ->
   Settings -> Security -> Keys) or `BW_SESSION` in `.env`; the script refuses
   to start without credentials and also requires `DATABASE_PASSWORD`.
+
+## Security notes
+
+- **Secrets stay out of the command line.** `run.py` reads `BW_SESSION` and the
+  database password exclusively from the environment (or a hidden interactive
+  prompt). Command-line arguments are visible to other processes (`ps`, Task
+  Manager, `/proc`) and are therefore not accepted.
+- **`.env` is your secret store.** It is excluded from git and the Docker build
+  context, but keep it out of synced folders (OneDrive, Dropbox, ...). The
+  KeePass database is only as secure as `DATABASE_PASSWORD`: if both the
+  database and the file containing its password live in the same cloud
+  account, the encryption offers little protection.
+- **Rotate leaked secrets.** Older commits of this repository contained a real
+  `DATABASE_PASSWORD` in the tracked `.env` file. If you ever used that value,
+  rotate it now and purge the git history (`git filter-repo` / BFG). The
+  repository now ships a gitleaks pre-commit hook and a CI secret scan to keep
+  secrets out of the tree.
+- **Scheduled backups run the latest code.** `PULL_LATEST=true` (the default)
+  pulls and executes a freshly fetched repository with your vault credentials.
+  For deterministic, auditable automation set `PULL_LATEST=false` or pin the
+  checkout/commit.
+- **Verified build inputs.** The Docker image pins the Bitwarden CLI version
+  and verifies its SHA-256 checksum at build time, pins `poetry`, and installs
+  Python dependencies from the lock file.
