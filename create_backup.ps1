@@ -20,13 +20,16 @@
     when the script is started from the Task Scheduler or similar
     (input redirection disables the pause automatically as well).
 
-    "--interactive" (or "-i") forces an interactive export: the container
-    keeps the terminal and asks for your Bitwarden email, master password,
-    2FA code (if enabled) and the KeePass database password - no secret needs
-    to be stored in ".env". When ".env" contains no Bitwarden credentials
-    (BW_CLIENTID / BW_CLIENTSECRET / BW_SESSION) and the script is started
-    from a real console (e.g. double-clicking create_backup.bat) it switches
-    to interactive mode automatically. Runs without a terminal (Task
+    "--interactive" (or "-i") forces an interactive export: the script asks
+    for your Bitwarden email, master password, 2FA code (if enabled) and the
+    KeePass database password with masked prompts in your OWN console window
+    and hands them to the container through temporary environment variables -
+    no secret needs to be stored in ".env" and no container TTY is required
+    (Docker-for-Windows terminals like VS Code / Windows Terminal can hang
+    with "docker compose run -it"). When ".env" contains no Bitwarden
+    credentials (BW_CLIENTID / BW_CLIENTSECRET / BW_SESSION) and the script is
+    started from a real console (e.g. double-clicking create_backup.bat) it
+    switches to interactive mode automatically. Runs without a terminal (Task
     Scheduler, redirected output) refuse to prompt and require credentials
     in ".env".
 
@@ -145,6 +148,22 @@ function Invoke-Cli {
     return $LASTEXITCODE
 }
 
+# Convert a SecureString back to plain text. The container needs the literal
+# value (entrypoint.sh reads it via `bw login --passwordenv`; run.py reads
+# DATABASE_PASSWORD from its environment) - PowerShell's ConvertFrom-SecureString
+# would produce an encrypted blob instead. Use the result immediately and clear
+# the plaintext variable (set it to $null) as soon as the value has been passed
+# to `docker compose run -e`.
+function ConvertTo-PlainText {
+    param([System.Security.SecureString]$Secure)
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
+    try {
+        return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+}
+
 # ---------------------------------------------------------------------------
 #  1) Pre-flight checks
 # ---------------------------------------------------------------------------
@@ -204,15 +223,20 @@ if (-not $UseModernCompose -and ((Invoke-Cli @("docker-compose", "version")) -ne
 }
 
 # ---------------------------------------------------------------------------
-#  SECURITY: interactive prompts are only safe when the container has a real
-#  terminal. Without a TTY, `bw login` / `bw unlock` would echo the typed
-#  master password in clear text - and redirected output (Task Scheduler
-#  logs, pipes) would write it to disk.
+#  SECURITY: prompts never run inside the container. The interactive export is
+#  only available when the script is started from a terminal (double-click
+#  create_backup.bat) or with "--interactive". The script collects the
+#  Bitwarden email, master password, 2FA code (if enabled) and the KeePass
+#  database password with masked prompts in its OWN window and hands them to a
+#  NON-interactive container via `-e` environment variables (the entrypoint
+#  reads them with `bw login --passwordenv` and clears them before run.py
+#  starts). No container TTY is involved: on some Docker-for-Windows terminals
+#  (VS Code / Windows Terminal, ConPTY) "docker compose run -it" allocates a
+#  pseudo-terminal but never forwards the host keystrokes, which makes
+#  in-container prompts hang.
 #
 #  * Interactive export (no secrets in ".env"): run from a real console
-#    (double-click create_backup.bat) or pass "--interactive". The container
-#    keeps the terminal and prompts for your Bitwarden email, master password,
-#    2FA code (if enabled) and the KeePass database password.
+#    (double-click create_backup.bat) or pass "--interactive".
 #  * Non-interactive / scheduled export: all secrets come from ".env" and the
 #    script fails fast if they are missing.
 # ---------------------------------------------------------------------------
@@ -241,40 +265,23 @@ if (-not $Interactive) {
 }
 
 if ($Interactive) {
-    Info "INTERACTIVE mode: you will be asked for your Bitwarden email, master password, 2FA code (if enabled) and the KeePass database password."
+    Info "INTERACTIVE mode: you will be asked for your Bitwarden email, master password, 2FA code (if enabled) and the KeePass database password - right before the export starts, in this window."
 }
 
 function Run-Compose {
     param([string[]]$ComposeArgs)
-    if ($Interactive) {
-        # `docker compose run` hands the terminal to the container for the
-        # masked `bw` / `getpass` prompts. It must keep the console directly
-        # (no pipe): if stdout were piped, Docker would not put the host
-        # terminal into raw mode and the typed master password would be echoed
-        # by the host in clear text.
-        # Every other command (currently only `build`) relays its stdout via
-        # Write-Host instead. Inside `if ((Run-Compose ...) -ne 0)` any native
-        # stdout line (e.g. "Image ... Built") would become extra function
-        # output and turn the return value into an Object[], making the
-        # `-ne 0` check always true - a successful build would look like a
-        # failure (see Invoke-Cli).
-        if ($ComposeArgs[0] -eq "run") {
-            if ($UseModernCompose) { docker compose @ComposeArgs }
-            else                   { docker-compose @ComposeArgs }
-            return $LASTEXITCODE
-        }
-        # Relay stdout to the console but keep it out of the return value (see Invoke-Cli).
-        # Deliberately NO 2>&1 here: docker prints its progress to stderr, and under
-        # $ErrorActionPreference = 'Stop' PowerShell 5.1 promotes native stderr to a
-        # terminating error, which would abort the script mid-build.
-        if ($UseModernCompose) { docker compose @ComposeArgs | ForEach-Object { Write-Host $_ } }
-        else                   { docker-compose @ComposeArgs | ForEach-Object { Write-Host $_ } }
-        return $LASTEXITCODE
-    }
-    # Relay stdout to the console but keep it out of the return value (see Invoke-Cli).
+    # Relay native stdout to the console but keep it out of the return value
+    # (see Invoke-Cli): any native stdout line (e.g. "Image ... Built") inside
+    # `if ((Run-Compose ...) -ne 0)` would become extra function output and
+    # turn the return value into an Object[], making the `-ne 0` check always
+    # true - a successful build would look like a failure.
     # Deliberately NO 2>&1 here: docker prints its progress to stderr, and under
     # $ErrorActionPreference = 'Stop' PowerShell 5.1 promotes native stderr to a
     # terminating error, which would abort the script mid-build.
+    # Interactive runs no longer pass "-it" to `run`: the container is
+    # non-interactive (secrets arrive via `-e` environment variables), so
+    # piping stdout cannot expose a typed password and the TTY-attach hang on
+    # Docker-for-Windows terminals is avoided.
     if ($UseModernCompose) { docker compose @ComposeArgs | ForEach-Object { Write-Host $_ } }
     else                   { docker-compose @ComposeArgs | ForEach-Object { Write-Host $_ } }
     return $LASTEXITCODE
@@ -315,10 +322,46 @@ if ($PullLatest) {
 if (Test-Path -Path $ExportFile -PathType Leaf) { Remove-Item -Force -Path $ExportFile }
 
 if ($Interactive) {
-    Info "Starting the interactive Docker export - follow the prompts inside the container..."
-    if ((Run-Compose @("run", "--rm", "--remove-orphans", "-it", $Service)) -ne 0) {
+    Info "Starting the interactive Docker export - the prompts appear in this window:"
+    $BwEmail = $null
+    while (-not $BwEmail) {
+        $BwEmail = Read-Host "Bitwarden email"
+        if (-not $BwEmail) { Write-Host "  Email must not be empty - try again." }
+    }
+    $BwMaster = ConvertTo-PlainText (Read-Host -AsSecureString "Bitwarden master password (input is masked)")
+    if (-not $BwMaster) { Exit-WithError "The Bitwarden master password must not be empty." }
+    $BwTotp = Read-Host "2FA code (visible input; press Enter to skip if not enabled)"
+    $CfgDbPass = Get-Cfg "DATABASE_PASSWORD" ""
+    $DbPassHint = if ($CfgDbPass) {
+        "KeePass database password (masked; press Enter to reuse the one from .env)"
+    } else {
+        "KeePass database password (masked)"
+    }
+    $DbPass = ConvertTo-PlainText (Read-Host -AsSecureString $DbPassHint)
+    if (-not $DbPass) { $DbPass = $CfgDbPass }
+    if (-not $DbPass) { Exit-WithError "No KeePass database password provided - re-run and type it, or set DATABASE_PASSWORD in '.env'." }
+
+    # Hand the secrets to a NON-interactive container as environment variables
+    # (entrypoint.sh reads them via `bw login --passwordenv` / `unlock
+    # --passwordenv` and clears them before run.py starts). No TTY flags: the
+    # container never needs keyboard input, and `docker compose run -it` can
+    # hang on some Docker-for-Windows terminals (VS Code / Windows Terminal,
+    # ConPTY) because the pseudo-terminal is allocated but the keystrokes are
+    # never forwarded. The secrets are cleared from this session right after
+    # the run, and from the container environment after the login.
+    $runArgs = @("run", "--rm", "--remove-orphans", "-T",
+                 "-e", ("BW_EMAIL=" + $BwEmail),
+                 "-e", ("BW_MASTER_PASSWORD=" + $BwMaster),
+                 "-e", ("DATABASE_PASSWORD=" + $DbPass))
+    if ($BwTotp) { $runArgs += @("-e", ("BW_TOTP=" + $BwTotp)) }
+    $runArgs += $Service
+    if ((Run-Compose $runArgs) -ne 0) {
         Exit-WithError "The Docker export failed."
     }
+    # Best-effort scrubbing of the secrets from this PowerShell session.
+    $BwMaster = $null
+    $BwTotp   = $null
+    $DbPass   = $null
 } else {
     Info "Starting the Docker export..."
     if ((Run-Compose @("run", "--rm", "--remove-orphans", $Service)) -ne 0) {

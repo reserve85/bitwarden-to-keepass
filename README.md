@@ -62,14 +62,19 @@ minutes) and then starts the container.
 The container authenticates **non-interactively** and exports your vault:
 
 1. It logs in and unlocks, or uses a pre-generated session:
-   - **Interactive (recommended if you do not want secrets in `.env`):** start
-     the container with `docker compose run -it bitwarden-to-keepass` and type
-     your email, master password and 2FA code into the terminal prompts. The
-     master password is **masked** by the CLI (nothing is echoed or stored);
-     note that the one-time 2FA code is shown as typed (official CLI behavior)
-     but is single-use and expires within seconds. The CLI only prompts when a
-     real terminal is attached - never when the script runs from Task Scheduler
-     or with redirected output.
+   - **Interactive (recommended if you do not want secrets in `.env`):**
+     double-click `create_backup.bat` (or run `create_backup.ps1`). The
+     PowerShell script asks for your email, master password, 2FA code (if
+     enabled) and the KeePass database password with **masked prompts in its
+     own window** and passes them to a *non-interactive* container via
+     temporary environment variables. It deliberately does **not** use
+     `docker compose run -it`: on some Docker-for-Windows terminals (VS Code /
+     Windows Terminal, ConPTY) that allocates a pseudo-terminal but never
+     forwards the host keystrokes, so in-container prompts hang. Manual
+     `docker compose run -it bitwarden-to-keepass` is still supported when the
+     container has a real terminal - the CLI masks the master password and
+     only prompts with a real terminal attached, never from Task Scheduler or
+     with redirected output.
    - **Automated / API key:** it logs in with the **personal API key**
      (`BW_CLIENTID` / `BW_CLIENTSECRET`) and unlocks the vault with your
      **Bitwarden master password** (`BW_PASSWORD`, read via
@@ -82,9 +87,9 @@ The container authenticates **non-interactively** and exports your vault:
    fields, attachments, notes) and secure notes are written into the KeePass
    database.
 3. You are prompted for the **KeePass database password** only if you did not
-   set `DATABASE_PASSWORD` in `.env` *and* the container has a terminal. Set
-   `DATABASE_PASSWORD` in `.env` for non-interactive or scheduled runs (see
-   "Automated backup").
+   set `DATABASE_PASSWORD` in `.env` (leave the prompt empty to reuse it). Set
+   `DATABASE_PASSWORD` in `.env` for non-interactive or scheduled runs where
+   nobody can type (see "Automated backup").
 
 ### 6. Where is the result?
 The database is written to `exports/bitwarden-export.kdbx` in the repository
@@ -141,10 +146,14 @@ disk, ...).
   `powershell -NoProfile -ExecutionPolicy Bypass -File "create_backup.ps1"`
 - **Interactive run (no secrets in `.env`):** leave the Bitwarden keys
   (`BW_CLIENTID` / `BW_CLIENTSECRET` / `BW_PASSWORD` / `BW_SESSION`) and
-  `DATABASE_PASSWORD` out of `.env` and start the script from a real terminal.
-  It detects the missing credentials, switches to interactive mode and prompts
-  for your Bitwarden email, master password, 2FA code (if enabled) and the
-  KeePass database password - all typed in the terminal, nothing is stored.
+  `DATABASE_PASSWORD` out of `.env` and double-click `create_backup.bat` (or
+  start the script from a terminal). It detects the missing credentials,
+  switches to interactive mode and asks for your Bitwarden email, master
+  password, 2FA code (if enabled) and the KeePass database password with
+  masked prompts in the **PowerShell window itself** (nothing is stored in
+  `.env`; the values reach the container as temporary environment variables
+  that the entrypoint clears after the login, and the container runs without
+  a TTY on purpose so this works from any terminal).
   `--interactive` forces this mode even if credentials are configured.
 - For scheduled runs (e.g. Task Scheduler) append `--no-pause` so the script
   does not wait for a keypress:

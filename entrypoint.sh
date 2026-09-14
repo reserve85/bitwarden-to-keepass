@@ -20,7 +20,8 @@ get_bw_session() {
         # Pre-generated session, e.g. `bw unlock --raw` run manually once.
         session="$BW_SESSION"
     elif [[ -t 0 ]]; then
-        # INTERACTIVE MODE - only reachable through `docker compose run -it`.
+        # INTERACTIVE MODE (manual runs only, via `docker compose run -it`);
+        # create_backup.ps1 uses the host-collected-secrets branch below.
         # stdin must be a real terminal so the prompts can be answered and the
         # master password masked. stdout is deliberately NOT required: on some
         # Docker-for-Windows hosts the container's stdout is not a terminal
@@ -72,6 +73,42 @@ get_bw_session() {
         unset bw_master
         if [[ -z "$session" ]]; then
             log_error "Interactive login succeeded, but obtaining a session failed. Run 'bw unlock --raw' in a terminal and set the output as BW_SESSION in '.env'."
+            return 1
+        fi
+    elif [[ -n "${BW_EMAIL:-}" && -n "${BW_MASTER_PASSWORD:-}" ]]; then
+        # INTERACTIVE LOGIN WITH HOST-COLLECTED SECRETS (create_backup.ps1
+        # --interactive / auto-detected). The PowerShell script asks for the
+        # email, master password, 2FA code and KeePass database password with
+        # masked prompts in its OWN window and hands them to this container as
+        # temporary environment variables. This deliberately requires NO
+        # container TTY: on some Docker-for-Windows terminals (VS Code /
+        # Windows Terminal, ConPTY) `docker compose run -it` allocates a
+        # pseudo-terminal but never forwards the host keystrokes, so
+        # in-container prompts hang forever while the host console stays
+        # silent. The secrets are cleared from the environment right after the
+        # login (run.py only needs DATABASE_PASSWORD).
+        "$BW_PATH" logout >/dev/null 2>&1 || true
+        echo "Logging in to Bitwarden as $BW_EMAIL (secrets collected by create_backup.ps1)..." >&2
+        if [[ -n "${BW_TOTP:-}" ]]; then
+            if ! BW_PASSWORD="$BW_MASTER_PASSWORD" "$BW_PATH" login --passwordenv BW_PASSWORD --code "$BW_TOTP" "$BW_EMAIL"; then
+                unset BW_EMAIL BW_MASTER_PASSWORD BW_TOTP
+                log_error "Login failed. Check the email address and master password; if 2FA is enabled, provide the one-time code (or approve a pending 'Login with device' request on your phone and re-run the script)."
+                return 1
+            fi
+        else
+            if ! BW_PASSWORD="$BW_MASTER_PASSWORD" "$BW_PATH" login --passwordenv BW_PASSWORD "$BW_EMAIL"; then
+                unset BW_EMAIL BW_MASTER_PASSWORD BW_TOTP
+                log_error "Login failed. Check the email address and master password."
+                return 1
+            fi
+        fi
+        # Fetch the raw session for run.py without prompting again: the password
+        # comes from the environment and stdin is /dev/null, so nothing echoes
+        # and nothing can be swallowed by the command substitution.
+        session=$(BW_PASSWORD="$BW_MASTER_PASSWORD" "$BW_PATH" unlock --passwordenv BW_PASSWORD --raw </dev/null 2>/dev/null)
+        unset BW_EMAIL BW_MASTER_PASSWORD BW_TOTP
+        if [[ -z "$session" ]]; then
+            log_error "Login succeeded, but obtaining a session failed. Run 'bw unlock --raw' in a terminal and set the output as BW_SESSION in '.env'."
             return 1
         fi
     elif [[ -n "${BW_CLIENTID:-}" && -n "${BW_CLIENTSECRET:-}" ]]; then

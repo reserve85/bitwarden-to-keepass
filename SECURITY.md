@@ -47,16 +47,24 @@ If you ever used a KeePass database password that was committed to git:
   personal API key is used, the master password is supplied through the
   `BW_PASSWORD` environment variable and handed to the CLI via
   `bw unlock --passwordenv` (no prompt, no echo, not stored by the script).
-- Interactive login (`docker compose run -it`) is only accepted when stdin is
-  a real terminal; prompts are written to stderr (the container's stdout may
-  not be a terminal on some Docker-for-Windows hosts). The email is read by
-  the shell and the master password is collected with a masked `getpass`
-  prompt (the same prompt `run.py` uses for the database password), then
-  handed to the CLI via `--passwordenv` (no echo, no prompt, not stored by the
-  script); the one-time 2FA code is prompted by the CLI, shown as typed
-  (official CLI behavior) but is single-use and expires within seconds.
-  Nothing is stored or written to redirected logs; the same commands started
-  unattended use the environment-based path instead.
+- The interactive export (`create_backup.ps1 --interactive`, or auto-detected
+  when credentials are missing) never prompts inside the container: the
+  PowerShell script collects the Bitwarden email, master password, 2FA code
+  (if enabled) and the KeePass database password with masked prompts in its
+  own console window and passes them to a *non-interactive* container as
+  environment variables (`docker compose run -T -e ...`), which the entrypoint
+  reads via `bw login --passwordenv` / `bw unlock --passwordenv` (no echo, no
+  interactive CLI prompt) and then `unset`s before the export script runs.
+  A manual `docker compose run -it` is still accepted when stdin is a real
+  terminal (prompts go to stderr - the container's stdout may not be a
+  terminal on some Docker-for-Windows hosts - and the master password goes
+  through `--passwordenv`; the one-time 2FA code is prompted by the CLI, shown
+  as typed, but is single-use and expires within seconds). The no-TTY design
+  exists because on some Docker-for-Windows terminals (VS Code / Windows
+  Terminal, ConPTY) `-it` allocates a pseudo-terminal but never forwards the
+  host keystrokes, which makes in-container prompts hang. Nothing is stored in
+  redirected logs; unattended runs use the environment-based (API key /
+  session) path instead.
 - The Docker image pins the Bitwarden CLI version and verifies its SHA-256.
 - gitleaks (pre-commit) and gitleaks + pip-audit (CI) scan for secrets and
   vulnerable dependencies.
