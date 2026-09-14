@@ -1,3 +1,4 @@
+# Copyright (C) 2025 David Němec
 import unittest
 from unittest.mock import patch
 

@@ -1,3 +1,4 @@
+# Copyright (C) 2025 David Němec
 import tempfile
 import unittest
 from argparse import Namespace

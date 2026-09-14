@@ -1,3 +1,4 @@
+# Copyright (C) 2025 David Němec
 from enum import IntEnum
 from urllib.parse import parse_qsl, urlsplit
 

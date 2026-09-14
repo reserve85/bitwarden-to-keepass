@@ -1,3 +1,4 @@
+# Copyright (C) 2025 David Němec
 import logging
 import os
 import sys

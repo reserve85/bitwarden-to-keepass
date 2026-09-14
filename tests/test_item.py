@@ -1,3 +1,4 @@
+# Copyright (C) 2025 David Němec
 import unittest
 
 from src.item import CustomFieldType, Item

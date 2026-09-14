@@ -1,3 +1,4 @@
+# Copyright (C) 2025 David Němec
 """Thin adapter around the Bitwarden CLI (``bw``)."""
 
 import json

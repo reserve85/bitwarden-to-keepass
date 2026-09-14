@@ -1,3 +1,4 @@
+# Copyright (C) 2025 David Němec
 import collections
 import re
 from collections.abc import Callable

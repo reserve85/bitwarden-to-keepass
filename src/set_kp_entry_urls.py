@@ -1,3 +1,4 @@
+# Copyright (C) 2025 David Němec
 from pykeepass.entry import Entry
 
 ANDROID_APP_PROPERTY = "AndroidApp"

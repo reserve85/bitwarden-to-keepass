@@ -1,3 +1,4 @@
+# Copyright (C) 2025 David Němec
 from __future__ import annotations
 
 import json
