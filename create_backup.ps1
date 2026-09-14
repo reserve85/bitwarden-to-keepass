@@ -20,7 +20,9 @@
     (input redirection disables the pause automatically as well).
 
     Requirements: a git checkout of this repository, Docker Desktop
-    running, and a configured ".env" file.
+    running, and a configured ".env" file. If Docker Desktop is still
+    starting, the script waits DOCKER_WAIT_SECONDS (default 30) seconds
+    for the daemon before giving up.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -112,12 +114,16 @@ function Exit-WithError {
 }
 
 # Run an external command from a token list and return its exit code.
+# The command's output is discarded so it cannot leak into the return value:
+# without this, stdout (e.g. `docker compose version`) would become part of
+# the result (an Object[] instead of the plain exit code) and silently break
+# every `-eq 0` / `-ne 0` check.
 function Invoke-Cli {
     param([string[]]$Command)
     $exe  = $Command[0]
     $rest = @()
     if ($Command.Length -gt 1) { $rest = $Command[1..($Command.Length - 1)] }
-    & $exe @rest
+    & $exe @rest | Out-Null
     return $LASTEXITCODE
 }
 
@@ -155,8 +161,22 @@ if ($null -eq $DockerCli) {
 }
 Info ("Using Docker CLI: {0}" -f $DockerCli.Source)
 
-if ((Invoke-Cli @("docker", "info")) -ne 0) {
-    Exit-WithError "The Docker daemon is not reachable. Is Docker Desktop running? Wait until the Docker Desktop whale icon is steady (it can take a few seconds to start), then run the script again."
+# Docker Desktop opens its UI long before the engine inside WSL2 is
+# reachable, so a single check right after startup fails spuriously.
+# Poll `docker info` for DOCKER_WAIT_SECONDS seconds before giving up.
+$DockerWaitSeconds = [int](Get-Cfg "DOCKER_WAIT_SECONDS" 30)
+$DockerReady = $false
+$ProbeDeadline = (Get-Date).AddSeconds($DockerWaitSeconds)
+while (-not $DockerReady) {
+    # quiet probe - `docker info` prints "Cannot connect..." to stderr on failure
+    $null = & $DockerCli.Source info 2>$null
+    if ($LASTEXITCODE -eq 0) { $DockerReady = $true; break }
+    if ((Get-Date) -ge $ProbeDeadline) { break }
+    Warn ("Docker daemon not reachable yet - Docker Desktop is probably still starting. Retrying in 3 s (giving up after {0} s)..." -f $DockerWaitSeconds)
+    Start-Sleep -Seconds 3
+}
+if (-not $DockerReady) {
+    Exit-WithError "The Docker daemon is not reachable (waited $DockerWaitSeconds s). Is Docker Desktop running? Wait until the Docker Desktop whale icon is steady (it can take a few seconds to start), then run the script again."
 }
 
 # Prefer the modern "docker compose" plugin, fall back to "docker-compose".
@@ -167,8 +187,12 @@ if (-not $UseModernCompose -and ((Invoke-Cli @("docker-compose", "version")) -ne
 
 function Run-Compose {
     param([string[]]$ComposeArgs)
-    if ($UseModernCompose) { docker compose @ComposeArgs }
-    else                   { docker-compose @ComposeArgs }
+    # Relay stdout to the console but keep it out of the return value (see Invoke-Cli).
+    # Deliberately NO 2>&1 here: docker prints its progress to stderr, and under
+    # $ErrorActionPreference = 'Stop' PowerShell 5.1 promotes native stderr to a
+    # terminating error, which would abort the script mid-build.
+    if ($UseModernCompose) { docker compose @ComposeArgs | ForEach-Object { Write-Host $_ } }
+    else                   { docker-compose @ComposeArgs | ForEach-Object { Write-Host $_ } }
     return $LASTEXITCODE
 }
 

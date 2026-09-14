@@ -125,3 +125,6 @@ disk, ...).
   `powershell -NoProfile -ExecutionPolicy Bypass -File "create_backup.ps1" --no-pause`
 - Set `PULL_LATEST=false` in `.env` to skip `git pull` and the Docker image
   rebuild for fast, deterministic scheduled backups.
+- Docker Desktop's UI opens before the engine (WSL2) is ready. The script
+  therefore waits up to `DOCKER_WAIT_SECONDS` (default 30, configurable in
+  `.env`) for the daemon before reporting "not reachable".
