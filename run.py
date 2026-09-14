@@ -7,6 +7,8 @@ from pathlib import Path
 
 from src.bitwarden_to_keepass import bitwarden_to_keepass
 
+logger = logging.getLogger(__name__)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s :: %(levelname)s :: %(message)s",
@@ -79,5 +81,5 @@ try:
     check_args(args)
     bitwarden_to_keepass(args)
 except RuntimeError:
-    logging.exception("Exception occurred.")
+    logger.exception("Exception occurred.")
     sys.exit(1)

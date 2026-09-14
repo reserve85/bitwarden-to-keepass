@@ -5,7 +5,7 @@ services:
     volumes:
       - .:/bitwarden-to-keepass:z
       - ./exports:/exports:z
-      - 'bw-config:/root/.config/Bitwarden CLI:z'
+      - 'bw-config:/root/.config/Bitwarden CLI'
     env_file:
       - .env
 

@@ -35,7 +35,7 @@ class Item:
         if "username" not in self.item["login"]:
             return ""
 
-        return self.item["login"]["username"] if self.item["login"]["username"] else ""
+        return self.item["login"]["username"] or ""
 
     def get_password(self) -> str:
         if "login" not in self.item:
@@ -44,30 +44,30 @@ class Item:
         if "password" not in self.item["login"]:
             return ""
 
-        return self.item["login"]["password"] if self.item["login"]["password"] else ""
+        return self.item["login"]["password"] or ""
 
     def get_notes(self) -> str:
         return self.item.get("notes", "")
 
-    def get_uris(self) -> list:
+    def get_uris(self) -> list[str]:
         if "login" not in self.item or "uris" not in self.item["login"]:
             return []
+        return [
+            uri["uri"] if uri["uri"] is not None else ""
+            for uri in self.item["login"]["uris"]
+        ]
 
-        for uri in self.item["login"]["uris"]:
-            uri["uri"] = uri["uri"] if uri["uri"] is not None else ""
-
-        return self.item["login"]["uris"]
-
-    def get_custom_fields(self) -> list:
+    def get_custom_fields(self) -> list[dict]:
         if "fields" not in self.item:
             return []
-
-        for field in self.item["fields"]:
-            field["name"] = field["name"] if field["name"] is not None else ""
-            field["value"] = field["value"] if field["value"] is not None else ""
-            field["type"] = CustomFieldType(field["type"])
-
-        return self.item["fields"]
+        return [
+            {
+                "name": field["name"] if field["name"] is not None else "",
+                "value": field["value"] if field["value"] is not None else "",
+                "type": CustomFieldType(field["type"]),
+            }
+            for field in self.item["fields"]
+        ]
 
     def get_attachments(self) -> list:
         if "attachments" not in self.item:

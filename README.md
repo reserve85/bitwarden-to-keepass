@@ -15,7 +15,7 @@ docker-compose run bitwarden-to-keepass
   - and choose KeePass database password
 
 ## Optional
-- You can edit `.env` and pre-set some options
+- Copy `.env.example` to `.env` and pre-set some options
   - `DATABASE_PASSWORD` - string, used as password for KeePass database
   - `DATABASE_KEYFILE` - path, used as keyfile password for KeePass database
   - `BITWARDEN_URL` - URL, used in case of self-hosted instances or bitwarden.eu
@@ -35,5 +35,9 @@ source .venv/bin/activate
 - [Download](https://bitwarden.com/help/article/cli/#download-and-install) official bitwarden-cli and do `bw login` (you need `BW_SESSION` for export to work).
 - Run
 ```
-python3 bitwarden-to-keepass.py --bw-session BW_SESSION --database-path DATABASE_PATH [--database-password DATABASE_PASSWORD] [--database-keyfile DATABASE_KEYFILE] [--bw-path BW_PATH]
+python run.py --bw-session BW_SESSION --database-path DATABASE_PATH [--database-password DATABASE_PASSWORD] [--database-keyfile DATABASE_KEYFILE] [--bw-path BW_PATH]
+```
+- Run the test suite (requires the virtual environment)
+```
+python -m unittest discover -s tests -v
 ```
