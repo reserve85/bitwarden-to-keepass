@@ -128,3 +128,9 @@ disk, ...).
 - Docker Desktop's UI opens before the engine (WSL2) is ready. The script
   therefore waits up to `DOCKER_WAIT_SECONDS` (default 30, configurable in
   `.env`) for the daemon before reporting "not reachable".
+- **Security:** the export never prompts for your Bitwarden email/password.
+  In a non-TTY environment `bw login` / `bw unlock` would echo them in clear
+  text (and redirected logs would store them on disk). Configure a personal
+  API key (`BW_CLIENTID` / `BW_CLIENTSECRET`, vault.bitwarden.com ->
+  Settings -> Security -> Keys) or `BW_SESSION` in `.env`; the script refuses
+  to start without credentials and also requires `DATABASE_PASSWORD`.

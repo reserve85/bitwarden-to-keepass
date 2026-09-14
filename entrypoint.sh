@@ -11,10 +11,28 @@ log_error() {
 
 get_bw_session() {
     local session
-    session=$("$BW_PATH" login --raw || "$BW_PATH" unlock --raw)
+    # SECURITY: never run the interactive `bw login` / `bw unlock` prompts.
+    # This container usually has no TTY, so the CLI would ECHO the typed email
+    # and master password in clear text - and redirected output (Task Scheduler
+    # logs, `*> file`) would write them to disk. Credentials must come from
+    # environment variables instead.
+    if [[ -n "${BW_CLIENTID:-}" && -n "${BW_CLIENTSECRET:-}" ]]; then
+        # Personal API key (non-interactive; no master password / 2FA needed).
+        # Log out first: `bw login` refuses while a previous session is stored
+        # in the persistent bw-config volume, and the fallback `bw unlock`
+        # would prompt for the password.
+        "$BW_PATH" logout >/dev/null 2>&1 || true
+        session=$("$BW_PATH" login --apikey --raw 2>/dev/null)
+    elif [[ -n "${BW_SESSION:-}" ]]; then
+        # Pre-generated session, e.g. `bw unlock --raw` run manually once.
+        session="$BW_SESSION"
+    else
+        log_error "No Bitwarden credentials configured. Set BW_CLIENTID and BW_CLIENTSECRET (personal API key: https://vault.bitwarden.com/#/settings/security/keys) or BW_SESSION in '.env'. Refusing to prompt interactively because the prompt would display the email and password in clear text."
+        return 1
+    fi
     if [[ -z "$session" ]]; then
-        log_error "Failed to obtain a Bitwarden session."
-        exit 1
+        log_error "Failed to obtain a Bitwarden session. Check BW_CLIENTID / BW_CLIENTSECRET in '.env'."
+        return 1
     fi
     echo "$session"
 }
@@ -44,7 +62,9 @@ if [[ "$current_server" != "$target_server" ]]; then
 fi
 
 export BW_SESSION
-BW_SESSION=$(get_bw_session)
+if ! BW_SESSION=$(get_bw_session); then
+    exit 1
+fi
 
 # Always lock the vault, even if a later step fails.
 trap '"$BW_PATH" lock >/dev/null 2>&1 || true' EXIT

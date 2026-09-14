@@ -185,6 +185,25 @@ if (-not $UseModernCompose -and ((Invoke-Cli @("docker-compose", "version")) -ne
     Exit-WithError "Docker Compose is not available. Is Docker Desktop running?"
 }
 
+# ---------------------------------------------------------------------------
+#  SECURITY: never let the export prompt for email/password.
+#  The container runs without a TTY, so the interactive `bw login` / `bw
+#  unlock` prompts would ECHO the master password in clear text (and when
+#  output is redirected, e.g. from Task Scheduler, it would be written to a
+#  log file). Require credentials in ".env" instead and fail fast.
+# ---------------------------------------------------------------------------
+$HasApiKey = (
+    $Cfg.ContainsKey("BW_CLIENTID") -and $Cfg["BW_CLIENTID"] -ne "" -and
+    $Cfg.ContainsKey("BW_CLIENTSECRET") -and $Cfg["BW_CLIENTSECRET"] -ne ""
+)
+$HasSession = $Cfg.ContainsKey("BW_SESSION") -and $Cfg["BW_SESSION"] -ne ""
+if (-not ($HasApiKey -or $HasSession)) {
+    Exit-WithError "Bitwarden credentials are missing in '.env'. Set BW_CLIENTID and BW_CLIENTSECRET (personal API key: vault.bitwarden.com -> Settings -> Security -> Keys) or BW_SESSION. The script refuses to run 'bw login' interactively because that prompt would display the email/password in clear text."
+}
+if (-not ($Cfg.ContainsKey("DATABASE_PASSWORD") -and $Cfg["DATABASE_PASSWORD"] -ne "")) {
+    Exit-WithError "DATABASE_PASSWORD is missing in '.env'. run.py uses it for the KeePass database; without it the export would prompt via getpass, which echoes the input in clear text when there is no TTY."
+}
+
 function Run-Compose {
     param([string[]]$ComposeArgs)
     # Relay stdout to the console but keep it out of the return value (see Invoke-Cli).

@@ -18,6 +18,12 @@ logging.basicConfig(
 
 def check_args(args: Namespace) -> Namespace:
     if not args.database_password:
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                "DATABASE_PASSWORD is not set and there is no interactive "
+                "terminal available. Refusing to prompt: without a TTY the "
+                "typed password would be echoed in clear text.",
+            )
         args.database_password = getpass(
             "Enter the database password (will not display): ",
         )
