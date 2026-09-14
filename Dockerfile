@@ -31,7 +31,7 @@ RUN apt-get update && \
 WORKDIR /bitwarden-to-keepass
 COPY pyproject.toml poetry.lock ./
 
-RUN pip install --no-cache-dir poetry==1.8.5 && \
+RUN pip install --no-cache-dir poetry==2.4.3 && \
     poetry install
 
 COPY . .

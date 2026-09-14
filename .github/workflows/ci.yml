@@ -58,6 +58,8 @@ jobs:
         # job spuriously. The versions are exported from poetry.lock, so the
         # audit automatically stays in sync with the lockfile.
         run: |
-          pip install poetry
+          # Poetry >= 2.0 no longer ships the `export` command in its core;
+          # it moved into the `poetry-plugin-export` plugin.
+          pip install poetry poetry-plugin-export
           poetry export --format requirements.txt --without-hashes --output "$RUNNER_TEMP/project-requirements.txt"
           pip-audit -r "$RUNNER_TEMP/project-requirements.txt"
