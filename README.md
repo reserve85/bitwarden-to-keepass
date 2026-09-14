@@ -114,6 +114,9 @@ password you chose in step 5.
 ```
 make build
 ```
+(On Windows, create the environment manually instead: `py -m venv .venv`,
+then `pip install poetry && poetry install`, and activate with
+`.venv\Scripts\activate`.)
 - You can either **create new (empty) KeePass database** (tested with [KeePassXC](https://github.com/keepassxreboot/keepassxc) but it will probably work with others) right now, otherwise one will be created when the script is executed
 - Go into the virtual environment
 ```
