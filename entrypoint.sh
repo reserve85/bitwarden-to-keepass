@@ -58,21 +58,29 @@ get_bw_session() {
         done
         # `bw` reads the password from the environment, so it neither echoes it
         # nor stores it; accounts with 2FA get the one-time code prompt on the
-        # terminal. The login status output stays on the console.
-        if ! BW_PASSWORD="$bw_master" "$BW_PATH" login --passwordenv BW_PASSWORD "$bw_email"; then
-            unset bw_master
-            log_error "Interactive login failed. Check your email address, master password and 2FA code (or approve a pending 'Login with device' request on your phone)."
-            return 1
+        # terminal. The session is fetched from the LOGIN process itself
+        # (`bw login --raw`): login derives the master key from the password,
+        # so the returned session stays unlocked for the later `bw` processes.
+        # A separate `bw unlock --raw` trips a known Bitwarden CLI bug
+        # (bitwarden/clients#20720): it returns a session key but the vault
+        # stays LOCKED, so `bw list ...` prompts for the master password again
+        # and fails with "The decryption operation failed". stderr stays open
+        # here so the interactive 2FA challenge still reaches the terminal; the
+        # session key is the only thing written to stdout (`--raw`).
+        session=$(BW_PASSWORD="$bw_master" "$BW_PATH" login --passwordenv BW_PASSWORD --raw "$bw_email")
+        if [[ -z "$session" ]]; then
+            # The login itself failed (wrong password / 2FA code) or this CLI
+            # returned only a locked session; fall back to the classic unlock
+            # path. The status check below rejects a still-locked vault.
+            session=$(BW_PASSWORD="$bw_master" "$BW_PATH" unlock --passwordenv BW_PASSWORD --raw </dev/null 2>/dev/null)
         fi
-        # Fetch the raw session for run.py without prompting again: the password
-        # comes from the environment and stdin is /dev/null, so nothing echoes
-        # and nothing can be swallowed by the command substitution. `bw unlock
-        # --raw` returns a session whether the login left the vault unlocked or
-        # only authenticated.
-        session=$(BW_PASSWORD="$bw_master" "$BW_PATH" unlock --passwordenv BW_PASSWORD --raw </dev/null 2>/dev/null)
         unset bw_master
         if [[ -z "$session" ]]; then
-            log_error "Interactive login succeeded, but obtaining a session failed. Run 'bw unlock --raw' in a terminal and set the output as BW_SESSION in '.env'."
+            log_error "Interactive login failed. Check your email address, master password and 2FA code (or approve a pending 'Login with device' request on your phone). If the login itself said it succeeded, run 'bw unlock --raw' manually and set the output as BW_SESSION in '.env'."
+            return 1
+        fi
+        if ! BW_SESSION="$session" "$BW_PATH" status 2>/dev/null | grep -q '"status":"unlocked"'; then
+            log_error "The session is not unlocked (known Bitwarden CLI bug bitwarden/clients#20720). Clear the Docker volume 'bitwarden-to-keepass_bw-config' (docker volume rm) and re-run, or set BW_SESSION in '.env' from a manual 'bw unlock --raw'."
             return 1
         fi
     elif [[ -n "${BW_EMAIL:-}" && -n "${BW_MASTER_PASSWORD:-}" ]]; then
@@ -89,26 +97,34 @@ get_bw_session() {
         # login (run.py only needs DATABASE_PASSWORD).
         "$BW_PATH" logout >/dev/null 2>&1 || true
         echo "Logging in to Bitwarden as $BW_EMAIL (secrets collected by create_backup.ps1)..." >&2
+        # Fetch the unlocked session DIRECTLY from the login process (`bw login
+        # --raw`): login derives the master key from the password, so the
+        # returned session can decrypt the vault in the later export processes.
+        # A separate `bw unlock --raw` trips a known Bitwarden CLI bug
+        # (bitwarden/clients#20720): it returns a session key but the vault
+        # stays LOCKED, so `bw list ...` prompts for the master password again
+        # and fails with "The decryption operation failed".
         if [[ -n "${BW_TOTP:-}" ]]; then
-            if ! BW_PASSWORD="$BW_MASTER_PASSWORD" "$BW_PATH" login --passwordenv BW_PASSWORD --code "$BW_TOTP" "$BW_EMAIL"; then
-                unset BW_EMAIL BW_MASTER_PASSWORD BW_TOTP
-                log_error "Login failed. Check the email address and master password; if 2FA is enabled, provide the one-time code (or approve a pending 'Login with device' request on your phone and re-run the script)."
-                return 1
-            fi
+            session=$(BW_PASSWORD="$BW_MASTER_PASSWORD" "$BW_PATH" login --passwordenv BW_PASSWORD --code "$BW_TOTP" --raw "$BW_EMAIL" 2>/dev/null)
         else
-            if ! BW_PASSWORD="$BW_MASTER_PASSWORD" "$BW_PATH" login --passwordenv BW_PASSWORD "$BW_EMAIL"; then
-                unset BW_EMAIL BW_MASTER_PASSWORD BW_TOTP
-                log_error "Login failed. Check the email address and master password."
-                return 1
-            fi
+            session=$(BW_PASSWORD="$BW_MASTER_PASSWORD" "$BW_PATH" login --passwordenv BW_PASSWORD --raw "$BW_EMAIL" 2>/dev/null)
         fi
-        # Fetch the raw session for run.py without prompting again: the password
-        # comes from the environment and stdin is /dev/null, so nothing echoes
-        # and nothing can be swallowed by the command substitution.
-        session=$(BW_PASSWORD="$BW_MASTER_PASSWORD" "$BW_PATH" unlock --passwordenv BW_PASSWORD --raw </dev/null 2>/dev/null)
+        if [[ -z "$session" ]]; then
+            # Fallback: a few server/CLI combinations only hand out a LOCKED
+            # session from `bw login --raw`; the classic unlock path still runs
+            # everything (the status check below rejects a still-locked vault).
+            session=$(BW_PASSWORD="$BW_MASTER_PASSWORD" "$BW_PATH" unlock --passwordenv BW_PASSWORD --raw </dev/null 2>/dev/null)
+        fi
         unset BW_EMAIL BW_MASTER_PASSWORD BW_TOTP
         if [[ -z "$session" ]]; then
-            log_error "Login succeeded, but obtaining a session failed. Run 'bw unlock --raw' in a terminal and set the output as BW_SESSION in '.env'."
+            log_error "Login failed. Check the email address and master password; if 2FA is enabled, provide the one-time code (or approve a pending 'Login with device' request on your phone and re-run the script)."
+            return 1
+        fi
+        # Guard against bitwarden/clients#20720: only accept a session whose
+        # vault is actually UNLOCKED, so the user gets this clear message
+        # instead of a cryptic crypto error from run.py later.
+        if ! BW_SESSION="$session" "$BW_PATH" status 2>/dev/null | grep -q '"status":"unlocked"'; then
+            log_error "The session is not unlocked (known Bitwarden CLI bug bitwarden/clients#20720). Clear the Docker volume 'bitwarden-to-keepass_bw-config' (docker volume rm) and re-run, or set BW_SESSION in '.env' from a manual 'bw unlock --raw'."
             return 1
         fi
     elif [[ -n "${BW_CLIENTID:-}" && -n "${BW_CLIENTSECRET:-}" ]]; then
