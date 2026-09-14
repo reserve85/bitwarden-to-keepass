@@ -19,20 +19,23 @@ get_bw_session() {
     if [[ -n "${BW_SESSION:-}" ]]; then
         # Pre-generated session, e.g. `bw unlock --raw` run manually once.
         session="$BW_SESSION"
-    elif [[ -t 0 ]] && [[ -t 1 ]]; then
+    elif [[ -t 0 ]]; then
         # INTERACTIVE MODE - only reachable through `docker compose run -it`.
-        # Both stdin and stdout must be real terminals. This is required: the
-        # old `session=$(bw login --raw)` gave the CLI a pipe on stdout while
-        # stdin stayed a terminal, and in that exact combination the CLI
-        # silently swallows its login prompts and waits forever instead of
-        # asking for the email address. So the email is read by bash and the
-        # master password by Python's getpass - the same masked prompt run.py
-        # uses for the database password - and then handed to the CLI through
-        # an environment variable; the only prompt the CLI still shows is the
-        # one-time 2FA code, which appears on the terminal (official CLI
-        # behavior). When the script runs unattended (create_backup.ps1 / Task
-        # Scheduler) stdin is not a TTY, so this branch is never taken and the
-        # secrets cannot leak into redirected logs.
+        # stdin must be a real terminal so the prompts can be answered and the
+        # master password masked. stdout is deliberately NOT required: on some
+        # Docker-for-Windows hosts the container's stdout is not a terminal
+        # even with `-t`, so every prompt is printed to stderr instead. The
+        # old `session=$(bw login --raw)` also captured the CLI's stdout, and
+        # in that exact combination the CLI silently swallows its login
+        # prompts and waits forever instead of asking for the email address.
+        # So the email is read by bash and the master password by Python's
+        # getpass - the same masked prompt run.py uses for the database
+        # password - and then handed to the CLI through an environment
+        # variable; the only prompt the CLI still shows is the one-time 2FA
+        # code, which appears on the terminal (official CLI behavior). When
+        # the script runs unattended (create_backup.ps1 / Task Scheduler)
+        # stdin is not a TTY, so this branch is never taken and the secrets
+        # cannot leak into redirected logs.
         "$BW_PATH" logout >/dev/null 2>&1 || true
         echo "Interactive Bitwarden login:" >&2
         echo "  Email is shown as typed; the master password is masked." >&2
@@ -41,7 +44,8 @@ get_bw_session() {
         echo "  personal-API-key flow (bw login --apikey; client secret is masked)." >&2
         local bw_email bw_master
         while :; do
-            read -rp "Bitwarden email: " bw_email
+            echo -n "Bitwarden email: " >&2
+            read -r bw_email
             bw_master=$(python3 -c 'import getpass; print(getpass.getpass("Master password: "))' </dev/tty) || {
                 echo "Could not read the master password - is the terminal still attached?" >&2
                 return 1
