@@ -1,0 +1,259 @@
+<#
+    create_backup.ps1
+    ============================================================
+    Full automation of the Bitwarden -> KeePass export:
+      1) (optional) pull the latest version of the repository
+      2) (optional) build the Docker image
+      3) run the export inside Docker
+      4) stamp the KeePass database with today's date and copy it
+         to every configured backup folder
+
+    All configuration lives in the ".env" file in this script's
+    folder (template: ".env.example") - nothing is hardcoded here.
+
+    Usage:
+      .\create_backup.ps1
+      .\create_backup.ps1 --no-pause
+
+    "--no-pause" skips the "press Enter" prompt at the end. Use it
+    when the script is started from the Task Scheduler or similar
+    (input redirection disables the pause automatically as well).
+
+    Requirements: a git checkout of this repository, Docker Desktop
+    running, and a configured ".env" file.
+#>
+
+$ErrorActionPreference = "Stop"
+
+# ---------------------------------------------------------------------------
+#  Configuration - loaded from ".env" next to this script.
+# ---------------------------------------------------------------------------
+
+function Read-EnvFile {
+    param([string]$Path)
+    $envVars = @{}
+    if (-not (Test-Path -Path $Path -PathType Leaf)) {
+        return $envVars
+    }
+    Get-Content -Path $Path -Encoding UTF8 | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -eq "" -or $line.StartsWith("#")) { return }
+        # tolerate bash-style "export KEY=VALUE"
+        if ($line -match '^export\s+') { $line = $line.Substring(7).Trim() }
+        $eq = $line.IndexOf("=")
+        if ($eq -lt 1) { return }
+        $key   = $line.Substring(0, $eq).Trim()
+        $value = $line.Substring($eq + 1).Trim()
+        # strip one level of surrounding single or double quotes
+        if ($value.Length -ge 2) {
+            $first = $value.Substring(0, 1)
+            $last  = $value.Substring($value.Length - 1)
+            if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+        }
+        $envVars[$key] = $value
+    }
+    return $envVars
+}
+
+$Cfg = Read-EnvFile (Join-Path $PSScriptRoot ".env")
+if ($Cfg.Count -eq 0) {
+    Write-Host ""
+    Write-Host "[ERROR] No configuration found in '.env' next to this script."
+    Write-Host "[ERROR] Copy '.env.example' to '.env' and adjust the values first."
+    Write-Host ""
+    exit 1
+}
+
+function Get-Cfg {
+    param([string]$Key, $Default)
+    if ($Cfg.ContainsKey($Key) -and $Cfg[$Key] -ne "") { return $Cfg[$Key] }
+    return $Default
+}
+
+# Pause at the end unless "--no-pause" was given or input is redirected.
+$WaitForKey = $true
+if ("--no-pause" -in $args) { $WaitForKey = $false }
+if ($WaitForKey -and [Console]::IsInputRedirected) { $WaitForKey = $false }
+
+# Optional run log; empty means no log file.
+$LogFile = Get-Cfg "LOG_FILE" ""
+
+function Log-Line {
+    param([string]$Prefix, [string]$Message)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $line = "{0} [{1}] {2}" -f $timestamp, $Prefix, $Message
+    Write-Host $line
+    if ($LogFile -ne "") {
+        try { Add-Content -Path $LogFile -Value $line -Encoding UTF8 }
+        catch { }   # logging must never break the backup
+    }
+}
+
+function Info {
+    param([string]$m)
+    Log-Line "INFO" $m
+}
+
+function Warn {
+    param([string]$m)
+    Log-Line "WARN" $m
+}
+
+function Exit-WithError {
+    param([string]$Message)
+    Log-Line "ERROR" $Message
+    if ($WaitForKey) {
+        Write-Host ""
+        Read-Host "Press Enter to close..."
+    }
+    exit 1
+}
+
+# Run an external command from a token list and return its exit code.
+function Invoke-Cli {
+    param([string[]]$Command)
+    $exe  = $Command[0]
+    $rest = @()
+    if ($Command.Length -gt 1) { $rest = $Command[1..($Command.Length - 1)] }
+    & $exe @rest
+    return $LASTEXITCODE
+}
+
+# ---------------------------------------------------------------------------
+#  1) Pre-flight checks
+# ---------------------------------------------------------------------------
+$RepoDir    = Get-Cfg "REPO_DIR" $null
+$Service    = Get-Cfg "COMPOSE_SERVICE" "bitwarden-to-keepass"
+$ExportRel  = Get-Cfg "EXPORT_REL_PATH" "exports\bitwarden-export.kdbx"
+$BackupStr  = Get-Cfg "BACKUP_DIRS" ""
+$PullLatest = (Get-Cfg "PULL_LATEST" "true") -match '^(1|true|yes|on)$'
+
+Write-Host ""
+Info "=== Bitwarden -> KeePass automated export ==="
+
+if ($RepoDir -eq $null -or $RepoDir -eq "") {
+    Exit-WithError "REPO_DIR is not set in '.env'. Point it at your local git checkout of this repository."
+}
+if (-not (Test-Path -Path (Join-Path $RepoDir ".git") -PathType Container)) {
+    Exit-WithError "Repository directory is missing or is not a git checkout: $RepoDir"
+}
+
+if ((Invoke-Cli @("docker", "version")) -ne 0) {
+    Exit-WithError "Docker CLI is not available. Is Docker Desktop installed and running?"
+}
+if ((Invoke-Cli @("docker", "info")) -ne 0) {
+    Exit-WithError "Docker daemon is not reachable. Is Docker Desktop running?"
+}
+
+# Prefer the modern "docker compose" plugin, fall back to "docker-compose".
+$UseModernCompose = ((Invoke-Cli @("docker", "compose", "version")) -eq 0)
+if (-not $UseModernCompose -and ((Invoke-Cli @("docker-compose", "version")) -ne 0)) {
+    Exit-WithError "Docker Compose is not available. Is Docker Desktop running?"
+}
+
+function Run-Compose {
+    param([string[]]$ComposeArgs)
+    if ($UseModernCompose) { docker compose @ComposeArgs }
+    else                   { docker-compose @ComposeArgs }
+    return $LASTEXITCODE
+}
+
+# ---------------------------------------------------------------------------
+#  2) Pull the latest version (optional)
+#  If this fails there are usually local changes in the repository (e.g. a
+#  modified ".env") - commit or stash them first, then run the script again.
+# ---------------------------------------------------------------------------
+Push-Location $RepoDir
+
+if ($PullLatest) {
+    Info "Pulling the latest version (git pull --ff-only)..."
+    git pull --ff-only
+    if ($LASTEXITCODE -ne 0) {
+        Exit-WithError "git pull failed. There are usually local changes in the repository (e.g. a modified '.env') - commit or stash them first, then run the script again."
+    }
+} else {
+    Info "PULL_LATEST=false - skipping 'git pull' and 'docker compose build'."
+}
+
+# ---------------------------------------------------------------------------
+#  3) Build the Docker image (optional)
+# ---------------------------------------------------------------------------
+if ($PullLatest) {
+    Info "Building the Docker image (docker compose build --pull)..."
+    if ((Run-Compose @("build", "--pull")) -ne 0) {
+        Exit-WithError "Docker image build failed."
+    }
+}
+
+# ---------------------------------------------------------------------------
+#  4) Run the export
+#  A previous export is removed up front so that a failed run can never
+#  leave a stale KeePass database behind.
+# ---------------------------------------------------------------------------
+$ExportFile = Join-Path $RepoDir $ExportRel
+if (Test-Path -Path $ExportFile -PathType Leaf) { Remove-Item -Force -Path $ExportFile }
+
+Info "Starting the Docker export..."
+if ((Run-Compose @("run", "--rm", "--remove-orphans", $Service)) -ne 0) {
+    Exit-WithError "The Docker export failed."
+}
+
+# ---------------------------------------------------------------------------
+#  5) Stamp the fresh export with today's date
+# ---------------------------------------------------------------------------
+if (-not (Test-Path -Path $ExportFile -PathType Leaf)) {
+    Exit-WithError "The export finished but no database was created. Expected file: $ExportFile"
+}
+
+$DateStamp   = Get-Date -Format "yyyyMMdd"
+$ExportDir   = Split-Path -Path $ExportFile -Parent
+$StampedFile = Join-Path $ExportDir ("{0}_bitwarden_export.kdbx" -f $DateStamp)
+
+# Remove a stale file from an earlier run on the same day.
+if (Test-Path -Path $StampedFile -PathType Leaf) { Remove-Item -Force -Path $StampedFile }
+Rename-Item -Path $ExportFile -NewName (Split-Path -Path $StampedFile -Leaf) -Force
+Info ("Export file renamed to {0}" -f (Split-Path -Path $StampedFile -Leaf))
+
+# ---------------------------------------------------------------------------
+#  6) Copy the stamped export to every backup folder
+# ---------------------------------------------------------------------------
+$Copied = $false
+if ($BackupStr.Trim() -eq "") {
+    Warn "BACKUP_DIRS is empty - no backup copies were made. The export was kept at: $StampedFile"
+} else {
+    foreach ($dir in $BackupStr.Split(";")) {
+        $dir = $dir.Trim()
+        if ($dir -eq "") { continue }
+        if (-not (Test-Path -Path $dir -PathType Container)) {
+            Warn "Backup folder does not exist, skipping: $dir"
+            continue
+        }
+        try {
+            Copy-Item -Path $StampedFile -Destination $dir -Force
+            Info "Copied to $dir"
+            $Copied = $true
+        } catch {
+            Log-Line "ERROR" "Copy to $dir FAILED: $($_.Exception.Message)"
+        }
+    }
+}
+
+# Only remove the temporary export when at least one copy succeeded,
+# otherwise that would delete the only remaining copy of the database.
+if ($Copied) {
+    Remove-Item -Force -Path $StampedFile
+    Info "Temporary export file removed."
+} elseif ($BackupStr.Trim() -ne "") {
+    Warn "No backup copy succeeded - the export was kept at: $StampedFile"
+}
+
+Write-Host ""
+Info "Process completed successfully."
+if ($WaitForKey) {
+    Write-Host ""
+    Read-Host "Press Enter to close..."
+}
+exit 0
+
