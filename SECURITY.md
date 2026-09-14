@@ -39,10 +39,14 @@ If you ever used a KeePass database password that was committed to git:
 
 ## Secure defaults
 
-- Secrets (`BW_SESSION`, `DATABASE_PASSWORD`, API keys) are only ever read
-  from the environment or a hidden prompt - never from the command line.
+- Secrets (`BW_SESSION`, `BW_PASSWORD`, `DATABASE_PASSWORD`, API keys) are
+  only ever read from the environment or a hidden prompt - never from the
+  command line.
 - The container refuses interactive `bw login` / `bw unlock` prompts because a
-  non-TTY prompt would echo the master password in clear text.
+  non-TTY prompt would echo the master password in clear text. When the
+  personal API key is used, the master password is supplied through the
+  `BW_PASSWORD` environment variable and handed to the CLI via
+  `bw unlock --passwordenv` (no prompt, no echo, not stored by the script).
 - The Docker image pins the Bitwarden CLI version and verifies its SHA-256.
 - gitleaks (pre-commit) and gitleaks + pip-audit (CI) scan for secrets and
   vulnerable dependencies.

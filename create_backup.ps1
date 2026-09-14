@@ -197,8 +197,12 @@ $HasApiKey = (
     $Cfg.ContainsKey("BW_CLIENTSECRET") -and $Cfg["BW_CLIENTSECRET"] -ne ""
 )
 $HasSession = $Cfg.ContainsKey("BW_SESSION") -and $Cfg["BW_SESSION"] -ne ""
+$HasBwPassword = $Cfg.ContainsKey("BW_PASSWORD") -and $Cfg["BW_PASSWORD"] -ne ""
 if (-not ($HasApiKey -or $HasSession)) {
-    Exit-WithError "Bitwarden credentials are missing in '.env'. Set BW_CLIENTID and BW_CLIENTSECRET (personal API key: vault.bitwarden.com -> Settings -> Security -> Keys) or BW_SESSION. The script refuses to run 'bw login' interactively because that prompt would display the email/password in clear text."
+    Exit-WithError "Bitwarden credentials are missing in '.env'. Set BW_CLIENTID and BW_CLIENTSECRET (personal API key: vault.bitwarden.com -> Settings -> Security -> Keys) plus BW_PASSWORD (your Bitwarden master password - see next check) or BW_SESSION. The script refuses to run 'bw login' interactively because that prompt would display the email/password in clear text."
+}
+if ($HasApiKey -and -not $HasSession -and -not $HasBwPassword) {
+    Exit-WithError "BW_PASSWORD is missing in '.env': current Bitwarden/Vaultwarden servers only create a LOCKED session from the personal API key, so the container needs your Bitwarden MASTER password to unlock it (via 'bw unlock --passwordenv'; no interactive prompt, nothing is echoed). This is NOT the KeePass DATABASE_PASSWORD. Alternative: set BW_SESSION from a manual 'bw unlock --raw'."
 }
 if (-not ($Cfg.ContainsKey("DATABASE_PASSWORD") -and $Cfg["DATABASE_PASSWORD"] -ne "")) {
     Exit-WithError "DATABASE_PASSWORD is missing in '.env'. run.py uses it for the KeePass database; without it the export would prompt via getpass, which echoes the input in clear text when there is no TTY."

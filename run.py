@@ -89,7 +89,8 @@ args = parser.parse_args()
 
 # SECURITY: the session is exclusively an environment variable, never a
 # command-line argument. Generate one with `bw unlock --raw` (or run the
-# Docker entrypoint, which uses a personal API key) and export it.
+# Docker entrypoint, which authenticates with the personal API key and unlocks
+# with the BW_PASSWORD environment variable) and export it.
 session = os.environ.get("BW_SESSION")
 if not session:
     parser.error(

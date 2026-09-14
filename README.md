@@ -62,10 +62,12 @@ minutes) and then starts the container.
 The container authenticates **non-interactively** and exports your vault:
 
 1. It logs in with the **personal API key** (`BW_CLIENTID` / `BW_CLIENTSECRET`)
-   or `BW_SESSION` from your `.env`. For security it *never* runs the
-   interactive `bw login` / `bw unlock` prompts - the container normally has
-   no terminal, so those prompts would echo your email and master password in
-   clear text and dump them into redirected logs.
+   and unlocks the vault with your **Bitwarden master password** (`BW_PASSWORD`,
+   read via `bw unlock --passwordenv` - no interactive prompt, nothing is
+   echoed), or uses a pre-generated `BW_SESSION` from your `.env`. For security
+   it *never* runs the interactive `bw login` / `bw unlock` prompts - the
+   container normally has no terminal, so those prompts would echo your email
+   and master password in clear text and dump them into redirected logs.
 2. Your vault is synced, and your logins (with TOTP seeds, URIs, custom
    fields, attachments, notes) and secure notes are written into the KeePass
    database.
@@ -139,8 +141,11 @@ disk, ...).
   In a non-TTY environment `bw login` / `bw unlock` would echo them in clear
   text (and redirected logs would store them on disk). Configure a personal
   API key (`BW_CLIENTID` / `BW_CLIENTSECRET`, vault.bitwarden.com ->
-  Settings -> Security -> Keys) or `BW_SESSION` in `.env`; the script refuses
-  to start without credentials and also requires `DATABASE_PASSWORD`.
+  Settings -> Security -> Keys) plus `BW_PASSWORD` (your Bitwarden master
+  password - current servers only create a locked session from the API key, so
+  the container unlocks it with `bw unlock --passwordenv`), or a pre-generated
+  `BW_SESSION`, in `.env`; the script refuses to start without credentials and
+  also requires `DATABASE_PASSWORD`.
 
 ## Security notes
 

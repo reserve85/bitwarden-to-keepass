@@ -1,5 +1,8 @@
 # Bitwarden CLI version and integrity check - pinned for reproducible builds and
 # to prevent a tampered binary from running with access to the whole vault.
+# Downloaded from the versioned GitHub release asset (the vault.bitwarden.com
+# CDN ignores the `version` query parameter and would serve the latest build,
+# making the SHA-256 check fail instead of pinning the wanted version).
 # SHA-256 verified against:
 # https://github.com/bitwarden/clients/releases/download/cli-v2026.8.0/bw-linux-2026.8.0.zip
 ARG BW_VERSION=2026.8.0
@@ -15,7 +18,7 @@ ARG BW_SHA256
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends wget unzip && \
-    wget -O "bw.zip" "https://vault.bitwarden.com/download/?app=cli&platform=linux&version=${BW_VERSION}" && \
+    wget -O "bw.zip" "https://github.com/bitwarden/clients/releases/download/cli-v${BW_VERSION}/bw-linux-${BW_VERSION}.zip" && \
     echo "${BW_SHA256}  bw.zip" | sha256sum -c - && \
     unzip bw.zip && \
     chmod +x ./bw && \

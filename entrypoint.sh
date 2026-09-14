@@ -16,22 +16,40 @@ get_bw_session() {
     # and master password in clear text - and redirected output (Task Scheduler
     # logs, `*> file`) would write them to disk. Credentials must come from
     # environment variables instead.
-    if [[ -n "${BW_CLIENTID:-}" && -n "${BW_CLIENTSECRET:-}" ]]; then
-        # Personal API key (non-interactive; no master password / 2FA needed).
+    if [[ -n "${BW_SESSION:-}" ]]; then
+        # Pre-generated session, e.g. `bw unlock --raw` run manually once.
+        session="$BW_SESSION"
+    elif [[ -n "${BW_CLIENTID:-}" && -n "${BW_CLIENTSECRET:-}" ]]; then
+        # Personal API key (non-interactive; no email/password prompt, no 2FA).
         # Log out first: `bw login` refuses while a previous session is stored
         # in the persistent bw-config volume, and the fallback `bw unlock`
         # would prompt for the password.
         "$BW_PATH" logout >/dev/null 2>&1 || true
+
+        # Some servers still hand out the session key directly at login time.
         session=$("$BW_PATH" login --apikey --raw 2>/dev/null)
-    elif [[ -n "${BW_SESSION:-}" ]]; then
-        # Pre-generated session, e.g. `bw unlock --raw` run manually once.
-        session="$BW_SESSION"
+
+        # Current Bitwarden servers and recent Vaultwarden releases only create
+        # a *locked* session from the API key (the login no longer returns the
+        # session key). Unlock it non-interactively with the master password
+        # from the environment: `bw unlock --passwordenv` reads the variable
+        # without a prompt, so nothing is echoed or written to disk.
+        if [[ -z "$session" ]]; then
+            if [[ -z "${BW_PASSWORD:-}" ]]; then
+                log_error "The API-key login only produces a locked session on current Bitwarden/Vaultwarden servers, and BW_PASSWORD (your Bitwarden MASTER password - NOT the KeePass DATABASE_PASSWORD) is not set. Add BW_PASSWORD to '.env'; it is read via 'bw unlock --passwordenv', never shown or stored by the CLI. Alternative: set BW_SESSION (from a manual 'bw unlock --raw')."
+                return 1
+            fi
+            # `bw login --apikey --raw` above already created the session on
+            # new CLI versions; a plain login is a harmless no-op otherwise.
+            "$BW_PATH" login --apikey >/dev/null 2>&1 || true
+            session=$("$BW_PATH" unlock --passwordenv BW_PASSWORD --raw </dev/null 2>/dev/null)
+        fi
     else
-        log_error "No Bitwarden credentials configured. Set BW_CLIENTID and BW_CLIENTSECRET (personal API key: https://vault.bitwarden.com/#/settings/security/keys) or BW_SESSION in '.env'. Refusing to prompt interactively because the prompt would display the email and password in clear text."
+        log_error "No Bitwarden credentials configured. Set BW_CLIENTID and BW_CLIENTSECRET (personal API key: https://vault.bitwarden.com/#/settings/security/keys) plus BW_PASSWORD, or set BW_SESSION in '.env'. Refusing to prompt interactively because the prompt would display the email and password in clear text."
         return 1
     fi
     if [[ -z "$session" ]]; then
-        log_error "Failed to obtain a Bitwarden session. Check BW_CLIENTID / BW_CLIENTSECRET in '.env'."
+        log_error "Failed to obtain a Bitwarden session. Check BW_CLIENTID, BW_CLIENTSECRET and BW_PASSWORD (Bitwarden master password) in '.env'."
         return 1
     fi
     echo "$session"
