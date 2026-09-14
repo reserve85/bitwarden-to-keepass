@@ -36,7 +36,15 @@ WORKDIR /bitwarden-to-keepass
 # the Bitwarden CLI stores its config there - the docker-compose 'bw-config'
 # volume is mounted exactly at that location.
 RUN useradd --create-home --shell /bin/bash --uid 1000 appuser && \
-    chown appuser:appuser /bitwarden-to-keepass
+    chown appuser:appuser /bitwarden-to-keepass && \
+    # Pre-create the Bitwarden CLI config directory as 'appuser'. When a fresh
+    # named volume is mounted at a path that does NOT exist in the image,
+    # Docker creates that directory (and thus the volume) as ROOT, and the CLI
+    # then crashes with EACCES the moment it writes 'data.json'. With the
+    # directory present and appuser-owned here, the copy Docker performs into a
+    # new volume inherits the appuser ownership.
+    mkdir -p "/home/appuser/.config/Bitwarden CLI" && \
+    chown appuser:appuser "/home/appuser/.config/Bitwarden CLI"
 ENV HOME=/home/appuser
 
 COPY pyproject.toml poetry.lock ./

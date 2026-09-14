@@ -289,6 +289,78 @@ function Run-Compose {
     else                   { docker-compose @ComposeArgs | ForEach-Object { Write-Host $_ } }
     return $LASTEXITCODE
 }
+# ---------------------------------------------------------------------------
+#  Volume-ownership helpers (root-owned 'bw-config' volume)
+#  The Bitwarden CLI stores its state in the named 'bw-config' volume mounted
+#  at '/home/appuser/.config/Bitwarden CLI'. Since the container runs as the
+#  unprivileged 'appuser', that volume must not be owned by root - neither a
+#  volume left over from runs before the image's non-root hardening, nor a
+#  fresh volume Docker created at a mount path that did not exist in the image
+#  (its root is then owned by root). Either way the CLI crashes with
+#  EACCES while writing 'data.json', which the entrypoint used to mask behind
+#  the misleading "Failed to configure Bitwarden server URL." error.
+# ---------------------------------------------------------------------------
+function Get-BwConfigVolume {
+    $names = & $DockerCli.Source volume ls --format "{{.Name}}"
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return ($names | Where-Object { $_ -match "_bw-config$" } | Select-Object -First 1)
+}
+
+function Get-ServiceImage {
+    # 'docker compose config --images' knows the real tag; fall back to the
+    # <project>_<service> guess for the legacy "docker-compose" binary.
+    if ($UseModernCompose) {
+        Push-Location $RepoDir
+        try {
+            $imgs = @(& $DockerCli.Source compose config --images)
+            if ($LASTEXITCODE -eq 0 -and $imgs.Count -gt 0 -and $imgs[0] -and $imgs[0].Trim() -ne "") {
+                return $imgs[0].Trim()
+            }
+        } finally {
+            Pop-Location
+        }
+    }
+    $project = ((Split-Path -Leaf $RepoDir) -replace '[^a-zA-Z0-9_-]', '').ToLowerInvariant()
+    return ("{0}_{1}" -f $project, $Service)
+}
+
+function Test-BwConfigWritable {
+    param([string]$Volume, [string]$Image)
+    if ([string]::IsNullOrWhiteSpace($Image)) { return $true }   # no image to probe with
+    $mountDir = "/home/appuser/.config/Bitwarden CLI"
+    # Run the probe from a FILE mounted into the container instead of a '-c'
+    # argument: PowerShell 5.1 mangles native arguments that contain both
+    # spaces and quotes, which reliably broke 'sh -c "touch ... CLI ..."'.
+    $scriptPath = Join-Path $env:TEMP ("bw-write-test-" + [guid]::NewGuid().ToString("N") + ".sh")
+    try {
+        $probe = "#!/bin/sh`ntouch `"$mountDir/.bw-write-test`" 2>/dev/null && rm -f `"$mountDir/.bw-write-test`" 2>/dev/null`n"
+        [IO.File]::WriteAllText($scriptPath, $probe)
+        $null = & $DockerCli.Source run --rm --entrypoint sh ("-v{0}:{1}" -f $Volume, $mountDir) ("-v{0}:/probe.sh:ro" -f $scriptPath) $Image /probe.sh
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Repair-BwConfigWritable {
+    param([string]$Volume, [string]$Image)
+    $mountDir = "/home/appuser/.config/Bitwarden CLI"
+    Warn ("The Bitwarden CLI config volume '{0}' is owned by root, which would crash 'bw' inside the container. Fixing its ownership once (your logged-in session is kept)..." -f $Volume)
+    # Same rationale as Test-BwConfigWritable: run the 'chown' from a mounted
+    # file, never through a '-c' argument with quotes/spaces.
+    $scriptPath = Join-Path $env:TEMP ("bw-chown-" + [guid]::NewGuid().ToString("N") + ".sh")
+    try {
+        $chown = "#!/bin/sh`nchown -R appuser:appuser `"$mountDir`" 2>&1`n"
+        [IO.File]::WriteAllText($scriptPath, $chown)
+        $null = & $DockerCli.Source run --rm --user root ("-v{0}:{1}" -f $Volume, $mountDir) ("-v{0}:/repair.sh:ro" -f $scriptPath) $Image sh /repair.sh
+        if ($LASTEXITCODE -ne 0) {
+            Exit-WithError ("Failed to fix the ownership of the Bitwarden CLI config volume '{0}'. Repair it manually from your repository folder: docker compose run --rm --user root --entrypoint chown {1} -R appuser:appuser `"/home/appuser/.config/Bitwarden CLI`" - or delete the volume with 'docker volume rm {0}' and re-run." -f $Volume, $Service)
+        }
+    } finally {
+        Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
+    }
+    Info "Volume ownership fixed."
+}
 
 # ---------------------------------------------------------------------------
 #  2) Pull the latest version (optional)
@@ -314,6 +386,27 @@ if ($PullLatest) {
     Info "Building the Docker image (docker compose build --pull)..."
     if ((Run-Compose @("build", "--pull")) -ne 0) {
         Exit-WithError "Docker image build failed."
+    }
+}
+
+# ---------------------------------------------------------------------------
+#  3.5) Repair the 'bw-config' volume ownership
+#  A volume left over from pre-non-root images - or created fresh by Docker at
+#  a mount path absent from the image - is owned by root, which makes the
+#  Bitwarden CLI crash with EACCES while writing its data.json (previously
+#  masked behind a misleading "Failed to configure Bitwarden server URL."
+#  error). The root-only 'chown' below touches nothing but the config directory
+#  and keeps the logged-in session. Runs after the build so the image exists
+#  against which to probe.
+# ---------------------------------------------------------------------------
+$BwConfigVolume = Get-BwConfigVolume
+if ($BwConfigVolume) {
+    $BwImage = Get-ServiceImage
+    if (-not (Test-BwConfigWritable $BwConfigVolume $BwImage)) {
+        Repair-BwConfigWritable $BwConfigVolume $BwImage
+        if (-not (Test-BwConfigWritable $BwConfigVolume $BwImage)) {
+            Exit-WithError ("The Bitwarden CLI config volume '{0}' is still not writable. Aborting - repair it manually from your repository folder and re-run: docker compose run --rm --user root --entrypoint chown {1} -R appuser:appuser `"/home/appuser/.config/Bitwarden CLI`" (alternatively delete the volume with 'docker volume rm {0}' and re-run)." -f $BwConfigVolume, $Service)
+        }
     }
 }
 

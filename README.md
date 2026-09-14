@@ -208,6 +208,13 @@ disk, ...).
   or this script cannot modify the host checkout; only `exports/` (the database
   output) is writable. The Bitwarden CLI config lives in the `bw-config` volume
   under `/home/appuser/.config/Bitwarden CLI` (one re-login is needed when you
-  upgrade from an image that used `/root`). On Linux hosts whose user id is not
+  upgrade from an image that used `/root`). That volume must be owned by
+  `appuser` - volumes left over from pre-hardening images, or fresh volumes
+  Docker creates at a mount path absent from the image (its root is owned by
+  `root`), make the CLI crash with `EACCES` while writing its `data.json`. The
+  image pre-creates the directory as `appuser`, and `create_backup.ps1`
+  detects and repairs a root-owned `bw-config` volume automatically on every
+  run. For manual `docker compose run`, the entrypoint prints the exact repair
+  command if the directory is not writable. On Linux hosts whose user id is not
   1000, run `chown -R 1000:1000 exports/` once so the container can write the
   database.

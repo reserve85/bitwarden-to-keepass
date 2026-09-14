@@ -13,6 +13,30 @@ log_error() {
     echo "Error: $1" >&2
 }
 
+# ---------------------------------------------------------------------------
+# The Bitwarden CLI stores its state in the named volume mounted at
+# $HOME/.config/Bitwarden CLI. The container runs as the unprivileged
+# 'appuser', but the volume can easily be owned by ROOT instead:
+#   * volumes created before the non-root hardening (commit 81dee46), or
+#   * fresh named volumes Docker creates at a mount path that does not exist
+#     in the image (the volume root is then created as root).
+# Either way the CLI (a Node.js binary) crashes with
+#   EACCES: permission denied, open '.../data.json'
+# which used to be masked behind the misleading "Failed to configure Bitwarden
+# server URL." Detect the condition up front and tell the user how to repair it.
+# ---------------------------------------------------------------------------
+BW_CONFIG_DIR="${HOME}/.config/Bitwarden CLI"
+if [[ ! -d "$BW_CONFIG_DIR" ]] || ! bw_config_probe=$(mktemp "$BW_CONFIG_DIR/.bw-write-test.XXXXXXXXXX" 2>/dev/null); then
+    log_error "The Bitwarden CLI config directory '$BW_CONFIG_DIR' is not writable by the container's user '$(id -un)' (uid $(id -u)) - the 'bw-config' volume is still owned by root."
+    log_error "Fix the ownership ONCE (keeps your logged-in session and 2FA state) - from your repository folder run:"
+    log_error "    docker compose run --rm --user root --entrypoint chown ${COMPOSE_SERVICE:-bitwarden-to-keepass} -R appuser:appuser \"$BW_CONFIG_DIR\""
+    log_error "(Replace '${COMPOSE_SERVICE:-bitwarden-to-keepass}' with your COMPOSE_SERVICE if you changed it.)"
+    log_error "Or, if you do not need to keep the logged-in session, simply delete the volume (find it with 'docker volume ls', usually named '<project>_bw-config') and re-run:"
+    log_error "    docker volume rm <project>_bw-config"
+    exit 1
+fi
+rm -f "$bw_config_probe"
+
 get_bw_session() {
     local session
     # SECURITY: never run the interactive `bw login` / `bw unlock` prompts.
@@ -189,10 +213,11 @@ current_server=$(normalize_url "$("$BW_PATH" config server 2>/dev/null)")
 target_server=$(normalize_url "$BITWARDEN_URL")
 if [[ "$current_server" != "$target_server" ]]; then
     "$BW_PATH" logout >/dev/null 2>&1 || true
-    "$BW_PATH" config server "$BITWARDEN_URL" >/dev/null 2>&1 || {
-        log_error "Failed to configure Bitwarden server URL."
+    if ! config_output=$("$BW_PATH" config server "$BITWARDEN_URL" 2>&1); then
+        log_error "Failed to configure Bitwarden server URL ('$BITWARDEN_URL')."
+        [[ -n "${config_output:-}" ]] && log_error "$config_output"
         exit 1
-    }
+    fi
 fi
 
 export BW_SESSION
