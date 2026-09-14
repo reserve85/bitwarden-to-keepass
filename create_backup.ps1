@@ -170,7 +170,10 @@ function ConvertTo-PlainText {
 $RepoDir     = Get-Cfg "REPO_DIR" $null
 $Service     = Get-Cfg "COMPOSE_SERVICE" "bitwarden-to-keepass"
 $BackupStr   = Get-Cfg "BACKUP_DIRS" ""
-$PullLatest  = (Get-Cfg "PULL_LATEST" "true") -match '^(1|true|yes|on)$'
+# Deterministic default: unattended runs execute the already-built Docker
+# image (see README "Security notes"). Change to "true" for manual runs to
+# pull the latest code and rebuild the image.
+$PullLatest  = (Get-Cfg "PULL_LATEST" "false") -match '^(1|true|yes|on)$'
 
 # The container writes the database to DATABASE_PATH (inside "/exports"), and
 # docker-compose mounts the host folder "<REPO_DIR>\exports" at "/exports".
@@ -301,7 +304,7 @@ if ($PullLatest) {
         Exit-WithError "git pull failed. There are usually local changes in the repository (e.g. a modified '.env') - commit or stash them first, then run the script again."
     }
 } else {
-    Info "PULL_LATEST=false - skipping 'git pull' and 'docker compose build'."
+    Info "PULL_LATEST=false - skipping 'git pull' and 'docker compose build'. The export runs the already-built Docker image (deterministic). To update the code, run once with PULL_LATEST=true or 'docker compose build'."
 }
 
 # ---------------------------------------------------------------------------

@@ -158,8 +158,9 @@ disk, ...).
 - For scheduled runs (e.g. Task Scheduler) append `--no-pause` so the script
   does not wait for a keypress:
   `powershell -NoProfile -ExecutionPolicy Bypass -File "create_backup.ps1" --no-pause`
-- Set `PULL_LATEST=false` in `.env` to skip `git pull` and the Docker image
-  rebuild for fast, deterministic scheduled backups.
+- Set `PULL_LATEST=true` in `.env` for manual runs that pull the latest code
+  and rebuild the Docker image. The default (`false`) runs the already-built
+  image for fast, deterministic scheduled backups.
 - Docker Desktop's UI opens before the engine (WSL2) is ready. The script
   therefore waits up to `DOCKER_WAIT_SECONDS` (default 30, configurable in
   `.env`) for the daemon before reporting "not reachable".
@@ -190,10 +191,12 @@ disk, ...).
   rotate it now and purge the git history (`git filter-repo` / BFG). The
   repository now ships a gitleaks pre-commit hook and a CI secret scan to keep
   secrets out of the tree.
-- **Scheduled backups run the latest code.** `PULL_LATEST=true` (the default)
-  pulls and executes a freshly fetched repository with your vault credentials.
-  For deterministic, auditable automation set `PULL_LATEST=false` or pin the
-  checkout/commit.
+- **Scheduled backups are deterministic.** `PULL_LATEST=false` is the default:
+  unattended runs execute the already-built Docker image, so a compromised
+  upstream repository or a freshly pushed bad commit cannot silently change
+  what your nightly backup does. Pull and rebuild deliberately for manual runs
+  (`PULL_LATEST=true` in `.env`, or `docker compose build`), ideally while you
+  review the changes.
 - **Verified build inputs.** The Docker image pins the Bitwarden CLI version
   and verifies its SHA-256 checksum at build time, pins `poetry`, and installs
   Python dependencies from the lock file.
