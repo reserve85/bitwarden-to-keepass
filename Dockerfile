@@ -29,9 +29,28 @@ RUN apt-get update && \
     rm -rf bw.zip
 
 WORKDIR /bitwarden-to-keepass
+
+# Run as an unprivileged user: the container must not rely on root privileges
+# (a compromised `bw` binary would otherwise inherit them) and it only needs to
+# write to the /exports volume. $HOME points at the app user's directory so
+# the Bitwarden CLI stores its config there - the docker-compose 'bw-config'
+# volume is mounted exactly at that location.
+RUN useradd --create-home --shell /bin/bash --uid 1000 appuser && \
+    chown appuser:appuser /bitwarden-to-keepass
+ENV HOME=/home/appuser
+
 COPY pyproject.toml poetry.lock ./
 
+# Create the virtualenv inside the project (not under $HOME) so `poetry run`
+# resolves it independently of the user the container eventually runs as.
 RUN pip install --no-cache-dir poetry==2.4.3 && \
-    poetry install
+    poetry config virtualenvs.in-project true && \
+    poetry install && \
+    # poetry ran as root while $HOME already pointed at /home/appuser, so its
+    # config and cache belong to root; hand the directory back to the runtime
+    # user or `poetry run` fails with a permission error later.
+    chown -R appuser:appuser /home/appuser /bitwarden-to-keepass/.venv
 
 COPY . .
+
+USER appuser

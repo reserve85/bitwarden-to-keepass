@@ -3,9 +3,20 @@ services:
     build: .
     command: ["/bin/bash", "entrypoint.sh"]
     volumes:
-      - .:/bitwarden-to-keepass:z
+      # Read-only source mounts: the code can be iterated on without a
+      # rebuild, but the container must NOT be able to modify the host
+      # checkout. `.env` is deliberately not mounted - the secrets reach the
+      # container only as environment variables (env_file) and are excluded
+      # from the image build context (.dockerignore), so no layer or mounted
+      # file ever contains them.
+      # pyproject.toml / poetry.lock are intentionally NOT mounted either: the
+      # image (and its in-project virtualenv) is built from their locked
+      # versions, and a host-side edit must not run against mismatched deps.
+      - ./src:/bitwarden-to-keepass/src:ro
+      - ./run.py:/bitwarden-to-keepass/run.py:ro
+      - ./entrypoint.sh:/bitwarden-to-keepass/entrypoint.sh:ro
       - ./exports:/exports:z
-      - 'bw-config:/root/.config/Bitwarden CLI'
+      - 'bw-config:/home/appuser/.config/Bitwarden CLI'
     env_file:
       - .env
 

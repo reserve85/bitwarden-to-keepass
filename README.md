@@ -200,3 +200,11 @@ disk, ...).
 - **Verified build inputs.** The Docker image pins the Bitwarden CLI version
   and verifies its SHA-256 checksum at build time, pins `poetry`, and installs
   Python dependencies from the lock file.
+- **Least privilege inside the container.** The image runs under an unprivileged
+  user (`appuser`, uid 1000) and the source tree is mounted read-only, so `bw`
+  or this script cannot modify the host checkout; only `exports/` (the database
+  output) is writable. The Bitwarden CLI config lives in the `bw-config` volume
+  under `/home/appuser/.config/Bitwarden CLI` (one re-login is needed when you
+  upgrade from an image that used `/root`). On Linux hosts whose user id is not
+  1000, run `chown -R 1000:1000 exports/` once so the container can write the
+  database.
