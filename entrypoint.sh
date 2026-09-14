@@ -28,7 +28,9 @@ get_bw_session() {
         # cannot leak into redirected logs.
         "$BW_PATH" logout >/dev/null 2>&1 || true
         echo "Interactive Bitwarden login: enter your email, then the master" >&2
-        echo "password (hidden) and - if your account uses 2FA - the code." >&2
+        echo "password (hidden). The one-time 2FA code is typed visibly but is" >&2
+        echo "single-use and expires within seconds - or skip it by using the" >&2
+        echo "personal-API-key flow (bw login --apikey; client secret is masked)." >&2
         session=$("$BW_PATH" login --raw)
         if [[ -z "$session" ]]; then
             log_error "Interactive login failed. Check your email address, master password and 2FA code (or approve a pending 'Login with device' request on your phone)."

@@ -64,10 +64,12 @@ The container authenticates **non-interactively** and exports your vault:
 1. It logs in and unlocks, or uses a pre-generated session:
    - **Interactive (recommended if you do not want secrets in `.env`):** start
      the container with `docker compose run -it bitwarden-to-keepass` and type
-     your email, master password and 2FA code into the terminal prompts (the
-     master password is masked). The CLI only prompts when a real terminal is
-     attached - never when the script runs from Task Scheduler or with
-     redirected output.
+     your email, master password and 2FA code into the terminal prompts. The
+     master password is **masked** by the CLI (nothing is echoed or stored);
+     note that the one-time 2FA code is shown as typed (official CLI behavior)
+     but is single-use and expires within seconds. The CLI only prompts when a
+     real terminal is attached - never when the script runs from Task Scheduler
+     or with redirected output.
    - **Automated / API key:** it logs in with the **personal API key**
      (`BW_CLIENTID` / `BW_CLIENTSECRET`) and unlocks the vault with your
      **Bitwarden master password** (`BW_PASSWORD`, read via
