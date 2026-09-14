@@ -124,11 +124,20 @@ function Invoke-Cli {
 # ---------------------------------------------------------------------------
 #  1) Pre-flight checks
 # ---------------------------------------------------------------------------
-$RepoDir    = Get-Cfg "REPO_DIR" $null
-$Service    = Get-Cfg "COMPOSE_SERVICE" "bitwarden-to-keepass"
-$ExportRel  = Get-Cfg "EXPORT_REL_PATH" "exports\bitwarden-export.kdbx"
-$BackupStr  = Get-Cfg "BACKUP_DIRS" ""
-$PullLatest = (Get-Cfg "PULL_LATEST" "true") -match '^(1|true|yes|on)$'
+$RepoDir     = Get-Cfg "REPO_DIR" $null
+$Service     = Get-Cfg "COMPOSE_SERVICE" "bitwarden-to-keepass"
+$BackupStr   = Get-Cfg "BACKUP_DIRS" ""
+$PullLatest  = (Get-Cfg "PULL_LATEST" "true") -match '^(1|true|yes|on)$'
+
+# The container writes the database to DATABASE_PATH (inside "/exports"), and
+# docker-compose mounts the host folder "<REPO_DIR>\exports" at "/exports".
+# The host-side export file is therefore derived from DATABASE_PATH - a single
+# source of truth, so there is no separate (easily mismatched) path setting.
+$DatabasePath = Get-Cfg "DATABASE_PATH" "/exports/bitwarden-export.kdbx"
+if ($DatabasePath -notmatch '^/exports/') {
+    Exit-WithError "DATABASE_PATH must start with /exports/ (the docker-compose volume mount); got: $DatabasePath"
+}
+$ExportFile = Join-Path $RepoDir (Join-Path "exports" (($DatabasePath -replace '^/exports/', '').Replace('/', '\')))
 
 Write-Host ""
 Info "=== Bitwarden -> KeePass automated export ==="
@@ -140,11 +149,14 @@ if (-not (Test-Path -Path (Join-Path $RepoDir ".git") -PathType Container)) {
     Exit-WithError "Repository directory is missing or is not a git checkout: $RepoDir"
 }
 
-if ((Invoke-Cli @("docker", "version")) -ne 0) {
-    Exit-WithError "Docker CLI is not available. Is Docker Desktop installed and running?"
+$DockerCli = Get-Command docker -ErrorAction SilentlyContinue
+if ($null -eq $DockerCli) {
+    Exit-WithError "docker.exe was not found on the PATH. Docker Desktop adds it to the PATH when it starts - make sure Docker Desktop is fully started, then reopen your terminal / run the script again."
 }
+Info ("Using Docker CLI: {0}" -f $DockerCli.Source)
+
 if ((Invoke-Cli @("docker", "info")) -ne 0) {
-    Exit-WithError "Docker daemon is not reachable. Is Docker Desktop running?"
+    Exit-WithError "The Docker daemon is not reachable. Is Docker Desktop running? Wait until the Docker Desktop whale icon is steady (it can take a few seconds to start), then run the script again."
 }
 
 # Prefer the modern "docker compose" plugin, fall back to "docker-compose".
@@ -192,7 +204,6 @@ if ($PullLatest) {
 #  A previous export is removed up front so that a failed run can never
 #  leave a stale KeePass database behind.
 # ---------------------------------------------------------------------------
-$ExportFile = Join-Path $RepoDir $ExportRel
 if (Test-Path -Path $ExportFile -PathType Leaf) { Remove-Item -Force -Path $ExportFile }
 
 Info "Starting the Docker export..."
