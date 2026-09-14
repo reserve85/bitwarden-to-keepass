@@ -103,6 +103,3 @@ class Item:
         secret = params.get("secret", self.item["login"]["totp"])
 
         return secret, f"{period};{digits}"
-
-    def get_dict(self) -> dict:
-        return self.item

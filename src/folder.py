@@ -1,18 +1,22 @@
 # Copyright (C) 2025 David Němec
+from __future__ import annotations
+
 import collections
 import re
-from collections.abc import Callable
-from typing import Optional
+from typing import TYPE_CHECKING
 
-from pykeepass import PyKeePass
-from pykeepass.group import Group as KPGroup
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from pykeepass import PyKeePass
+    from pykeepass.group import Group as KPGroup
 
 
 class Folder:
     id: str | None
     name: str | None
-    children: list["Folder"]
-    parent: Optional["Folder"]
+    children: list[Folder]
+    parent: Folder | None
     keepass_group: KPGroup | None
 
     def __init__(self, id: str | None) -> None:
@@ -22,7 +26,7 @@ class Folder:
         self.parent = None
         self.keepass_group = None
 
-    def add_child(self, child: "Folder") -> None:
+    def add_child(self, child: Folder) -> None:
         self.children.append(child)
         child.parent = self
 
