@@ -54,21 +54,31 @@ class Item:
         if "login" not in self.item or "uris" not in self.item["login"]:
             return []
         return [
-            uri["uri"] if uri["uri"] is not None else ""
+            (uri.get("uri") or "") if isinstance(uri, dict) else ""
             for uri in self.item["login"]["uris"]
         ]
 
     def get_custom_fields(self) -> list[dict]:
-        if "fields" not in self.item:
+        if not isinstance(self.item.get("fields"), list):
             return []
-        return [
-            {
-                "name": field["name"] if field["name"] is not None else "",
-                "value": field["value"] if field["value"] is not None else "",
-                "type": CustomFieldType(field["type"]),
-            }
-            for field in self.item["fields"]
-        ]
+        fields = []
+        for field in self.item["fields"]:
+            if not isinstance(field, dict):
+                continue
+            try:
+                field_type = CustomFieldType(field.get("type"))
+            except ValueError:
+                # Future/unknown field types are treated as hidden so a new
+                # "secret-like" type is never exposed in clear text.
+                field_type = CustomFieldType.HIDDEN
+            fields.append(
+                {
+                    "name": field.get("name") or "",
+                    "value": field.get("value") or "",
+                    "type": field_type,
+                },
+            )
+        return fields
 
     def get_attachments(self) -> list:
         if "attachments" not in self.item:

@@ -40,6 +40,26 @@ class ItemTest(unittest.TestCase):
         self.assertEqual(self._login_item().get_password(), "")
         self.assertEqual(Item({"id": "1"}).get_username(), "")
 
+    def test_unknown_field_type_is_treated_as_hidden(self) -> None:
+        # A future Bitwarden field type must never be exported in clear text.
+        item = Item(
+            {"id": "id1", "fields": [{"name": "future", "value": "secret", "type": 9}]},
+        )
+        fields = item.get_custom_fields()
+        self.assertEqual(fields[0]["type"], CustomFieldType.HIDDEN)
+
+    def test_custom_field_without_type_is_treated_as_hidden(self) -> None:
+        item = Item({"id": "id1", "fields": [{"name": "x", "value": "y"}]})
+        self.assertEqual(item.get_custom_fields()[0]["type"], CustomFieldType.HIDDEN)
+
+    def test_get_uris_tolerates_missing_uri_key(self) -> None:
+        item = self._login_item(uris=[{"match": "no uri key"}])
+        self.assertEqual(item.get_uris(), [""])
+
+    def test_get_custom_fields_tolerates_non_list_value(self) -> None:
+        item = Item({"id": "id1", "fields": "malformed"})
+        self.assertEqual(item.get_custom_fields(), [])
+
 
 if __name__ == "__main__":
     unittest.main()
