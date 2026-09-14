@@ -19,28 +19,55 @@ get_bw_session() {
     if [[ -n "${BW_SESSION:-}" ]]; then
         # Pre-generated session, e.g. `bw unlock --raw` run manually once.
         session="$BW_SESSION"
-    elif [[ -t 0 ]]; then
+    elif [[ -t 0 ]] && [[ -t 1 ]]; then
         # INTERACTIVE MODE - only reachable through `docker compose run -it`.
-        # stdin is a real terminal here, so the CLI masks the master password
-        # and asks for the two-step code itself; nothing is echoed or stored.
-        # When the script runs unattended (create_backup.ps1 / Task Scheduler)
-        # stdin is not a TTY, so this branch is never taken and the secrets
-        # cannot leak into redirected logs.
+        # Both stdin and stdout must be real terminals. This is required: the
+        # old `session=$(bw login --raw)` gave the CLI a pipe on stdout while
+        # stdin stayed a terminal, and in that exact combination the CLI
+        # silently swallows its login prompts and waits forever instead of
+        # asking for the email address. So the email is read by bash and the
+        # master password by Python's getpass - the same masked prompt run.py
+        # uses for the database password - and then handed to the CLI through
+        # an environment variable; the only prompt the CLI still shows is the
+        # one-time 2FA code, which appears on the terminal (official CLI
+        # behavior). When the script runs unattended (create_backup.ps1 / Task
+        # Scheduler) stdin is not a TTY, so this branch is never taken and the
+        # secrets cannot leak into redirected logs.
         "$BW_PATH" logout >/dev/null 2>&1 || true
-        echo "Interactive Bitwarden login: enter your email, then the master" >&2
-        echo "password (hidden). The one-time 2FA code is typed visibly but is" >&2
-        echo "single-use and expires within seconds - or skip it by using the" >&2
-        echo "personal-API-key flow (bw login --apikey; client secret is masked)." >&2
-        session=$("$BW_PATH" login --raw)
-        if [[ -z "$session" ]]; then
+        echo "Interactive Bitwarden login:" >&2
+        echo "  Email is shown as typed; the master password is masked." >&2
+        echo "  The one-time 2FA code (if enabled) is typed visibly but is" >&2
+        echo "  single-use and expires within seconds - or skip it by using the" >&2
+        echo "  personal-API-key flow (bw login --apikey; client secret is masked)." >&2
+        local bw_email bw_master
+        while :; do
+            read -rp "Bitwarden email: " bw_email
+            bw_master=$(python3 -c 'import getpass; print(getpass.getpass("Master password: "))' </dev/tty) || {
+                echo "Could not read the master password - is the terminal still attached?" >&2
+                return 1
+            }
+            if [[ -n "$bw_email" && -n "$bw_master" ]]; then
+                break
+            fi
+            echo "Email and master password must not be empty - try again." >&2
+        done
+        # `bw` reads the password from the environment, so it neither echoes it
+        # nor stores it; accounts with 2FA get the one-time code prompt on the
+        # terminal. The login status output stays on the console.
+        if ! BW_PASSWORD="$bw_master" "$BW_PATH" login --passwordenv BW_PASSWORD "$bw_email"; then
+            unset bw_master
             log_error "Interactive login failed. Check your email address, master password and 2FA code (or approve a pending 'Login with device' request on your phone)."
             return 1
         fi
-        # Email+password login normally leaves the vault unlocked; if the flow
-        # only authenticated (locked), stop with a hint instead of failing
-        # later during sync/export.
-        if "$BW_PATH" status 2>/dev/null | grep -q '"status":"locked"'; then
-            log_error "The vault is locked after the interactive login. Run 'bw unlock --raw' in a terminal and set the output as BW_SESSION in '.env'."
+        # Fetch the raw session for run.py without prompting again: the password
+        # comes from the environment and stdin is /dev/null, so nothing echoes
+        # and nothing can be swallowed by the command substitution. `bw unlock
+        # --raw` returns a session whether the login left the vault unlocked or
+        # only authenticated.
+        session=$(BW_PASSWORD="$bw_master" "$BW_PATH" unlock --passwordenv BW_PASSWORD --raw </dev/null 2>/dev/null)
+        unset bw_master
+        if [[ -z "$session" ]]; then
+            log_error "Interactive login succeeded, but obtaining a session failed. Run 'bw unlock --raw' in a terminal and set the output as BW_SESSION in '.env'."
             return 1
         fi
     elif [[ -n "${BW_CLIENTID:-}" && -n "${BW_CLIENTSECRET:-}" ]]; then

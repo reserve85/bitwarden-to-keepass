@@ -47,11 +47,15 @@ If you ever used a KeePass database password that was committed to git:
   personal API key is used, the master password is supplied through the
   `BW_PASSWORD` environment variable and handed to the CLI via
   `bw unlock --passwordenv` (no prompt, no echo, not stored by the script).
-- Interactive login (`docker compose run -it`) is only accepted when stdin is a
-  real terminal. The CLI masks the master password on input; the one-time 2FA
-  code is shown as typed (official CLI behavior) but is single-use and expires
-  within seconds. Nothing is stored or written to redirected logs; the same
-  commands started unattended use the environment-based path instead.
+- Interactive login (`docker compose run -it`) is only accepted when both
+  stdin and stdout are real terminals. The email is read by the shell and the
+  master password is collected with a masked `getpass` prompt (the same prompt
+  `run.py` uses for the database password), then handed to the CLI via
+  `--passwordenv` (no echo, no prompt, not stored by the script); the one-time
+  2FA code is prompted by the CLI, shown as typed (official CLI behavior) but
+  is single-use and expires within seconds. Nothing is stored or written to
+  redirected logs; the same commands started unattended use the
+  environment-based path instead.
 - The Docker image pins the Bitwarden CLI version and verifies its SHA-256.
 - gitleaks (pre-commit) and gitleaks + pip-audit (CI) scan for secrets and
   vulnerable dependencies.
