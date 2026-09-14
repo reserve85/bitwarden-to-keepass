@@ -4,6 +4,10 @@ set -uo pipefail
 
 BW_PATH="${BW_PATH:-bw}"
 BITWARDEN_URL="${BITWARDEN_URL:-https://bitwarden.com}"
+# Match the 600 s cap the Python side applies to every `bw` call
+# (COMMAND_TIMEOUT_SECONDS in src/bw_client.py): a hung `bw sync` (unreachable
+# server, stuck daemon) must not block a scheduled export forever.
+COMMAND_TIMEOUT_SECONDS=600
 
 log_error() {
     echo "Error: $1" >&2
@@ -104,6 +108,10 @@ get_bw_session() {
         # (bitwarden/clients#20720): it returns a session key but the vault
         # stays LOCKED, so `bw list ...` prompts for the master password again
         # and fails with "The decryption operation failed".
+        # SECURITY NOTE: the one-time 2FA code is the only secret handed to
+        # the CLI as a command-line argument (--code) - the only place the CLI
+        # accepts it. It is single-use, expires within seconds and is never
+        # stored anywhere by this script.
         if [[ -n "${BW_TOTP:-}" ]]; then
             session=$(BW_PASSWORD="$BW_MASTER_PASSWORD" "$BW_PATH" login --passwordenv BW_PASSWORD --code "$BW_TOTP" --raw "$BW_EMAIL" 2>/dev/null)
         else
@@ -195,8 +203,8 @@ fi
 # Always lock the vault, even if a later step fails.
 trap '"$BW_PATH" lock >/dev/null 2>&1 || true' EXIT
 
-"$BW_PATH" sync || {
-    log_error "Failed to sync Bitwarden vault."
+timeout "$COMMAND_TIMEOUT_SECONDS" "$BW_PATH" sync || {
+    log_error "Failed to sync Bitwarden vault (timed out after ${COMMAND_TIMEOUT_SECONDS}s)."
     exit 1
 }
 

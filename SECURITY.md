@@ -41,7 +41,10 @@ If you ever used a KeePass database password that was committed to git:
 
 - Secrets (`BW_SESSION`, `BW_PASSWORD`, `DATABASE_PASSWORD`, API keys) are
   only ever read from the environment or a hidden prompt - never from the
-  command line.
+  command line. The single exception is the *one-time 2FA code* that an
+  interactive login has to hand to the CLI (`bw login --code ...`): the CLI
+  accepts it nowhere else. It is only used for interactive runs, is
+  single-use, expires within seconds and is never persisted.
 - The container refuses interactive `bw login` / `bw unlock` prompts because a
   non-TTY prompt would echo the master password in clear text. When the
   personal API key is used, the master password is supplied through the
