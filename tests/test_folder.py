@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pykeepass import create_database
+from pykeepass import PyKeePass, create_database
 
 from src.folder import Folder, load_folders, nested_traverse_insert
 
@@ -60,6 +60,24 @@ class LoadFoldersTest(unittest.TestCase):
         kp = create_database(str(self.db_path), password="test")
         groups = load_folders(kp, [])
         self.assertEqual(groups, {None: kp.root_group})
+
+    def test_load_folders_reuses_existing_group_on_name_collision(self) -> None:
+        # Regression: importing into a database that already contains a group
+        # with the same name used to raise (pykeepass rejects duplicate group
+        # names) and abort the whole export.
+        kp = create_database(str(self.db_path), password="test")
+        kp.add_group(kp.root_group, "a")
+        groups = load_folders(kp, [{"id": "1", "name": "a"}])
+
+        self.assertEqual(groups["1"].name, "a")
+        self.assertEqual(len(kp.root_group.subgroups), 1)
+
+        # Entries for that folder land in the pre-existing group.
+        kp.add_entry(groups["1"], "Title", "user", "pass")
+        kp.save()
+        reloaded = PyKeePass(str(self.db_path), password="test")
+        entry = reloaded.find_entries(title="Title", first=True)
+        self.assertEqual(entry.group.name, "a")
 
 
 if __name__ == "__main__":

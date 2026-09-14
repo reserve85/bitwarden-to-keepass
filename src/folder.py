@@ -113,7 +113,19 @@ def load_folders(kp: PyKeePass, folders: list[dict]) -> dict[str | None, KPGroup
     # create keepass groups based off folder tree
     def add_keepass_group(kp: PyKeePass, folder: Folder) -> None:
         parent_group: KPGroup = folder.parent.keepass_group
-        new_group: KPGroup = kp.add_group(parent_group, folder.name)
+        # Reuse an existing subgroup with the same name instead of raising:
+        # pykeepass rejects duplicate group names, and a single collision
+        # (importing into a database that already has a group called e.g. "a")
+        # would otherwise abort the whole export. This also folds two Bitwarden
+        # folders onto the same name into one group, mirroring the jslib logic
+        # this module was lifted from.
+        existing = [
+            group for group in parent_group.subgroups if group.name == folder.name
+        ]
+        if existing:
+            new_group: KPGroup = existing[0]
+        else:
+            new_group = kp.add_group(parent_group, folder.name)
         folder.keepass_group = new_group
         groups_by_id[folder.id] = new_group
 
