@@ -139,6 +139,13 @@ disk, ...).
   `BACKUP_DIRS`, ...) in addition to the Docker keys.
 - Double-click `create_backup.bat`, or run the script directly:
   `powershell -NoProfile -ExecutionPolicy Bypass -File "create_backup.ps1"`
+- **Interactive run (no secrets in `.env`):** leave the Bitwarden keys
+  (`BW_CLIENTID` / `BW_CLIENTSECRET` / `BW_PASSWORD` / `BW_SESSION`) and
+  `DATABASE_PASSWORD` out of `.env` and start the script from a real terminal.
+  It detects the missing credentials, switches to interactive mode and prompts
+  for your Bitwarden email, master password, 2FA code (if enabled) and the
+  KeePass database password - all typed in the terminal, nothing is stored.
+  `--interactive` forces this mode even if credentials are configured.
 - For scheduled runs (e.g. Task Scheduler) append `--no-pause` so the script
   does not wait for a keypress:
   `powershell -NoProfile -ExecutionPolicy Bypass -File "create_backup.ps1" --no-pause`
@@ -147,15 +154,16 @@ disk, ...).
 - Docker Desktop's UI opens before the engine (WSL2) is ready. The script
   therefore waits up to `DOCKER_WAIT_SECONDS` (default 30, configurable in
   `.env`) for the daemon before reporting "not reachable".
-- **Security:** the export never prompts for your Bitwarden email/password.
-  In a non-TTY environment `bw login` / `bw unlock` would echo them in clear
-  text (and redirected logs would store them on disk). Configure a personal
-  API key (`BW_CLIENTID` / `BW_CLIENTSECRET`, vault.bitwarden.com ->
-  Settings -> Security -> Keys) plus `BW_PASSWORD` (your Bitwarden master
-  password - current servers only create a locked session from the API key, so
-  the container unlocks it with `bw unlock --passwordenv`), or a pre-generated
-  `BW_SESSION`, in `.env`; the script refuses to start without credentials and
-  also requires `DATABASE_PASSWORD`.
+- **Security:** unattended runs (Task Scheduler, redirected output) never
+  prompt for your Bitwarden email/password - without a terminal `bw login` /
+  `bw unlock` would echo them in clear text (and redirected logs would store
+  them on disk). For those runs configure a personal API key (`BW_CLIENTID` /
+  `BW_CLIENTSECRET`, vault.bitwarden.com -> Settings -> Security -> Keys) plus
+  `BW_PASSWORD` (your Bitwarden master password - current servers only create
+  a locked session from the API key, so the container unlocks it with
+  `bw unlock --passwordenv`), or a pre-generated `BW_SESSION`, in `.env`. From
+  a real terminal the script instead runs interactively and asks you for the
+  credentials - nothing needs to be stored in `.env`.
 
 ## Security notes
 

@@ -14,10 +14,21 @@
     Usage:
       .\create_backup.ps1
       .\create_backup.ps1 --no-pause
+      .\create_backup.ps1 --interactive
 
     "--no-pause" skips the "press Enter" prompt at the end. Use it
     when the script is started from the Task Scheduler or similar
     (input redirection disables the pause automatically as well).
+
+    "--interactive" (or "-i") forces an interactive export: the container
+    keeps the terminal and asks for your Bitwarden email, master password,
+    2FA code (if enabled) and the KeePass database password - no secret needs
+    to be stored in ".env". When ".env" contains no Bitwarden credentials
+    (BW_CLIENTID / BW_CLIENTSECRET / BW_SESSION) and the script is started
+    from a real console (e.g. double-clicking create_backup.bat) it switches
+    to interactive mode automatically. Runs without a terminal (Task
+    Scheduler, redirected output) refuse to prompt and require credentials
+    in ".env".
 
     Requirements: a git checkout of this repository, Docker Desktop
     running, and a configured ".env" file. If Docker Desktop is still
@@ -78,6 +89,13 @@ function Get-Cfg {
 $WaitForKey = $true
 if ("--no-pause" -in $args) { $WaitForKey = $false }
 if ($WaitForKey -and [Console]::IsInputRedirected) { $WaitForKey = $false }
+
+# True when stdin is attached to a real console (not a pipe / redirect).
+$HasConsole = -not [Console]::IsInputRedirected
+
+# "--interactive" forces the interactive export even if credentials are
+# configured in ".env".
+$ForceInteractive = ("--interactive" -in $args) -or ("-i" -in $args)
 
 # Optional run log; empty means no log file.
 $LogFile = Get-Cfg "LOG_FILE" ""
@@ -186,11 +204,17 @@ if (-not $UseModernCompose -and ((Invoke-Cli @("docker-compose", "version")) -ne
 }
 
 # ---------------------------------------------------------------------------
-#  SECURITY: never let the export prompt for email/password.
-#  The container runs without a TTY, so the interactive `bw login` / `bw
-#  unlock` prompts would ECHO the master password in clear text (and when
-#  output is redirected, e.g. from Task Scheduler, it would be written to a
-#  log file). Require credentials in ".env" instead and fail fast.
+#  SECURITY: interactive prompts are only safe when the container has a real
+#  terminal. Without a TTY, `bw login` / `bw unlock` would echo the typed
+#  master password in clear text - and redirected output (Task Scheduler
+#  logs, pipes) would write it to disk.
+#
+#  * Interactive export (no secrets in ".env"): run from a real console
+#    (double-click create_backup.bat) or pass "--interactive". The container
+#    keeps the terminal and prompts for your Bitwarden email, master password,
+#    2FA code (if enabled) and the KeePass database password.
+#  * Non-interactive / scheduled export: all secrets come from ".env" and the
+#    script fails fast if they are missing.
 # ---------------------------------------------------------------------------
 $HasApiKey = (
     $Cfg.ContainsKey("BW_CLIENTID") -and $Cfg["BW_CLIENTID"] -ne "" -and
@@ -198,18 +222,38 @@ $HasApiKey = (
 )
 $HasSession = $Cfg.ContainsKey("BW_SESSION") -and $Cfg["BW_SESSION"] -ne ""
 $HasBwPassword = $Cfg.ContainsKey("BW_PASSWORD") -and $Cfg["BW_PASSWORD"] -ne ""
-if (-not ($HasApiKey -or $HasSession)) {
-    Exit-WithError "Bitwarden credentials are missing in '.env'. Set BW_CLIENTID and BW_CLIENTSECRET (personal API key: vault.bitwarden.com -> Settings -> Security -> Keys) plus BW_PASSWORD (your Bitwarden master password - see next check) or BW_SESSION. The script refuses to run 'bw login' interactively because that prompt would display the email/password in clear text."
+
+# Automatic fallback: started from a real console without Bitwarden
+# credentials in ".env" -> run interactively. Redirected input (Task
+# Scheduler, pipes) must keep refusing: no TTY, no safe prompt.
+$Interactive = $ForceInteractive -or ($HasConsole -and -not ($HasApiKey -or $HasSession))
+
+if (-not $Interactive) {
+    if (-not ($HasApiKey -or $HasSession)) {
+        Exit-WithError "Bitwarden credentials are missing in '.env'. Set BW_CLIENTID and BW_CLIENTSECRET (personal API key: vault.bitwarden.com -> Settings -> Security -> Keys) plus BW_PASSWORD (your Bitwarden master password - see next check) or BW_SESSION. Alternatively start the script from a real terminal (no input redirection) - it then runs interactively and asks for email, master password, 2FA and the KeePass database password instead."
+    }
+    if ($HasApiKey -and -not $HasSession -and -not $HasBwPassword) {
+        Exit-WithError "BW_PASSWORD is missing in '.env': current Bitwarden/Vaultwarden servers only create a LOCKED session from the personal API key, so the container needs your Bitwarden MASTER password to unlock it (via 'bw unlock --passwordenv'; no interactive prompt, nothing is echoed). This is NOT the KeePass DATABASE_PASSWORD. Alternative: set BW_SESSION from a manual 'bw unlock --raw', or start the script from a real terminal for the interactive export."
+    }
+    if (-not ($Cfg.ContainsKey("DATABASE_PASSWORD") -and $Cfg["DATABASE_PASSWORD"] -ne "")) {
+        Exit-WithError "DATABASE_PASSWORD is missing in '.env'. run.py uses it for the KeePass database; without it the export would prompt via getpass, which echoes the input in clear text when there is no TTY. Or start the script from a real terminal for the interactive export - it asks for the password with masked input instead."
+    }
 }
-if ($HasApiKey -and -not $HasSession -and -not $HasBwPassword) {
-    Exit-WithError "BW_PASSWORD is missing in '.env': current Bitwarden/Vaultwarden servers only create a LOCKED session from the personal API key, so the container needs your Bitwarden MASTER password to unlock it (via 'bw unlock --passwordenv'; no interactive prompt, nothing is echoed). This is NOT the KeePass DATABASE_PASSWORD. Alternative: set BW_SESSION from a manual 'bw unlock --raw'."
-}
-if (-not ($Cfg.ContainsKey("DATABASE_PASSWORD") -and $Cfg["DATABASE_PASSWORD"] -ne "")) {
-    Exit-WithError "DATABASE_PASSWORD is missing in '.env'. run.py uses it for the KeePass database; without it the export would prompt via getpass, which echoes the input in clear text when there is no TTY."
+
+if ($Interactive) {
+    Info "INTERACTIVE mode: you will be asked for your Bitwarden email, master password, 2FA code (if enabled) and the KeePass database password."
 }
 
 function Run-Compose {
     param([string[]]$ComposeArgs)
+    if ($Interactive) {
+        # The interactive export hands the terminal to the container for the
+        # `bw` / `getpass` prompts. Docker must talk to the console directly -
+        # piping stdout here would detach it from the TTY.
+        if ($UseModernCompose) { docker compose @ComposeArgs }
+        else                   { docker-compose @ComposeArgs }
+        return $LASTEXITCODE
+    }
     # Relay stdout to the console but keep it out of the return value (see Invoke-Cli).
     # Deliberately NO 2>&1 here: docker prints its progress to stderr, and under
     # $ErrorActionPreference = 'Stop' PowerShell 5.1 promotes native stderr to a
@@ -253,9 +297,16 @@ if ($PullLatest) {
 # ---------------------------------------------------------------------------
 if (Test-Path -Path $ExportFile -PathType Leaf) { Remove-Item -Force -Path $ExportFile }
 
-Info "Starting the Docker export..."
-if ((Run-Compose @("run", "--rm", "--remove-orphans", $Service)) -ne 0) {
-    Exit-WithError "The Docker export failed."
+if ($Interactive) {
+    Info "Starting the interactive Docker export - follow the prompts inside the container..."
+    if ((Run-Compose @("run", "--rm", "--remove-orphans", "-it", $Service)) -ne 0) {
+        Exit-WithError "The Docker export failed."
+    }
+} else {
+    Info "Starting the Docker export..."
+    if ((Run-Compose @("run", "--rm", "--remove-orphans", $Service)) -ne 0) {
+        Exit-WithError "The Docker export failed."
+    }
 }
 
 # ---------------------------------------------------------------------------
